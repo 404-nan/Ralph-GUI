@@ -1,46 +1,44 @@
-# Ralph Loop（Temporary Ops Friendly）
+# Ralph Loop（暫定運用向け）
 
-> Japanese-first docs are in `README.ja.md`. This file is a short EN overview.
+このリポジトリは、LuLOS を作るまでの一時運用でも使いやすいように、Ralph を **止めずに回し続ける** ための機能をまとめています。
 
-Ralph Loop is tuned for temporary operation before LuLOS, with practical operator UX:
+- CLIで進捗が見える
+- AIの発話を明確に見分けられる
+- Discord通知（任意）
+- Webパネルだけでも同等の監視・回答入力ができる
+- AIから質問が出ても、回答待ちで停止せず継続する
 
-- clear CLI progress output
-- clear AI-output labeling
-- optional Discord webhook notifications
-- lightweight web panel with refresh button (works fully without Discord)
-- non-blocking Q&A flow (keeps running even if answer is pending)
-
-## Quick Start
+## 1) 使い方（基本）
 
 ```bash
 chmod +x ./ralph-loop/ralph.sh
 ./ralph-loop/ralph.sh "codex exec --full-auto" 20
 ```
 
-## Web Panel
+## 2) Webパネル
 
 ```bash
 python3 ./ralph-loop/dashboard.py
 # http://localhost:8787
 ```
 
-The panel shows status/log tail and lets you append answers to `answers.txt`.
+Webパネルでは、現在状態やログ末尾の確認、`answers.txt` への回答追記ができます。
 
-## Discord Notifications (Optional)
+## 3) Discord通知（任意）
 
 ```bash
 DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." \
 ./ralph-loop/ralph.sh "codex exec --full-auto" 20
 ```
 
-If Discord is disabled, equivalent notifications are still written to `events.log` and shown in the web panel.
+Discordを使わない場合でも、同等の通知は `events.log` に保存され、Webパネルから確認できます。
 
-## Q&A without stopping loop
+## 4) ループを止めない質問対応
 
-If AI emits:
+AIが以下を出力した場合:
 
 ```text
 <question>...</question>
 ```
 
-Ralph logs and notifies it, but continues work. Any new lines added to `answers.txt` are injected into the next prompt block automatically.
+Ralph は質問をログ・通知しつつ処理を継続します。`answers.txt` に追記した新しい回答は、次回プロンプトへ自動で注入されます。
