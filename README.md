@@ -1,86 +1,94 @@
-# Ralph Loop: Universal AI Coding Agent Loop
+# Ralph Loop（暫定運用向け）
 
-[日本語README](./README.ja.md)
+このリポジトリは、LuLOS を作るまでの一時運用でも使いやすいように、Ralph を **止めずに回し続ける** ための機能をまとめています。
 
-This repository implements the "Ralph" autonomous coding loop pattern, designed to be agnostic of the specific AI agent being used. Whether you use Claude, Codex, Gemini, or local models via Ollama/Qwen, Ralph Loop orchestrates the process.
+- CLIで進捗が見える
+- AIの発話を明確に見分けられる
+- Discord通知（任意）
+- Webパネルだけでも同等の監視・回答入力ができる
+- AIから質問が出ても、回答待ちで停止せず継続する
 
-> **What is Ralph?**
-> Ralph is a bash loop that:
-> 1. Pipes a context prompt and task list (`prd.json`) into your AI agent.
-> 2. The agent picks a story, implements it, runs tests, commits, and updates its progress.
-> 3. The loop repeats until all stories are marked complete.
-
-## 🚀 Setup
-
-The core machinery is located in ``.
-
-1. **Define your backlog**: Edit `prd.json` with your user stories.
-2. **Configure your environment**: Ensure your project has test commands (e.g., `npm test`, `cargo test`) ready for the agent to use.
-3. **Make executable**: `chmod +x ./ralph-loop/ralph.sh`
-
-## 🏃 Usage
-
-Run the `./ralph-loop/ralph.sh` script and pass your agent's CLI command as the first argument. You can optionally specify the maximum number of iterations as the second argument (default is 10). The script assumes your agent accepts the prompt via **Standard Input (stdin)**.
+## 使い方（クイックスタート）
 
 ```bash
-./ralph-loop/ralph.sh "<YOUR_AGENT_COMMAND>" [MAX_ITERATIONS]
-```
-
-### Examples
-
-#### Claude Code (Anthropic)
-```bash
-# Run up to 20 iterations
-./ralph-loop/ralph.sh "claude --dangerously-skip-permissions" 20
-```
-
-#### Codex CLI
-OpenAI's autonomous agent CLI.
-```bash
-# --full-auto bypasses confirmation prompts (required for headless loop)
+chmod +x ./ralph-loop/ralph.sh
 ./ralph-loop/ralph.sh "codex exec --full-auto" 20
 ```
 
-#### Gemini CLI
-Google's GenAI agent CLI.
+## 使い方解説
+
+### 1. 事前準備
+
+1. `ralph-loop/prd.json` に実行したいストーリーを用意
+2. `ralph-loop/prompt.md` にエージェントへ渡す指示を記載
+3. エージェントCLI（例: Codex CLI）がこの環境で実行できる状態にする
+
+### 2. ループ実行
+
 ```bash
-# --yolo enables autonomous action execution
-./ralph-loop/ralph.sh "gemini --yolo" 20
+./ralph-loop/ralph.sh "codex exec --full-auto" 20
 ```
 
-#### Qwen Code
-Alibaba's Qwen agent CLI.
-*Requires configuring "YOLO Mode" for autonomous execution.*
-```bash
-# 1. Update .qwen/settings.json to allow fully autonomous mode:
-#    { "permissions": { "defaultMode": "yolo" } }
-# 2. Run Ralph (assuming qwen accepts stdin)
-./ralph-loop/ralph.sh "qwen" 20
+- 第1引数: エージェント実行コマンド
+- 第2引数: 最大反復回数（省略時は `MAX_ITERATIONS` か既定値 `10`）
+
+### 3. 実行中に確認するもの
+
+- CLI上の進捗表示（完了数/残数/次ストーリー）
+- `status.json`（機械可読ステータス）
+- `events.log`（通知イベント）
+- `questions.log`（AIからの質問）
+
+### 4. AIから質問が来たとき
+
+AIが以下を出力した場合:
+
+```text
+<question>...</question>
 ```
 
-## 📁 File Structure
+- ループは停止せず継続
+- 質問は `questions.log` と `events.log` に記録
+- 人間は `answers.txt` へ回答を追記（またはWebパネルで送信）
+- 回答は次回プロンプトへ自動注入
 
-- `ralph-loop/ralph.sh`: The main loop script.
-- `prd.json`: Your product requirements/backlog.
-- `progress.txt`: Persistent memory and learnings log.
-- `prompt.md`: The system prompt fed to the agent on every iteration.
+### 5. よく使う環境変数
 
-## 🧠 Memory & Context
-
-Ralph persists memory through:
-1. **Git History**: Commits made by the agent.
-2. **`progress.txt`**: A log of what was done and "learnings" (patterns/gotchas) discovered.
-3. **`prd.json`**: Tracking which stories are passed/failed.
-
-## customizing for specific agents
-
-If your agent requires the prompt as an argument instead of stdin, you can modify `ralph-loop/ralph.sh` or create a small wrapper script.
-
-**Wrapper Example (agent-wrapper.sh):**
 ```bash
-#!/bin/bash
-# Read stdin to a variable
-PROMPT=$(cat)
-# explicit-agent --prompt "$PROMPT"
+MAX_ITERATIONS=20 \
+SLEEP_SECONDS=1 \
+SHOW_PROGRESS_LINES=8 \
+AI_OUTPUT_PREFIX="🤖 AI> " \
+./ralph-loop/ralph.sh "codex exec --full-auto"
 ```
-Then run: `./ralph-loop/ralph.sh "./agent-wrapper.sh"`
+
+- `MAX_ITERATIONS`（既定: `10`）
+- `SLEEP_SECONDS`（既定: `2`）
+- `SHOW_PROGRESS_LINES`（既定: `5`）
+- `AI_OUTPUT_PREFIX`（既定: `🤖 AI> `）
+- `DISCORD_WEBHOOK_URL`（任意）
+- `STATUS_FILE`（既定: `status.json`）
+- `ANSWER_FILE`（既定: `answers.txt`）
+- `EVENT_LOG_FILE`（既定: `events.log`）
+
+## Webパネル
+
+```bash
+python3 ./ralph-loop/dashboard.py
+# http://localhost:8787
+```
+
+Webパネルでは以下ができます。
+
+- 現在状態の確認
+- `progress.txt` / `questions.log` / `events.log` の末尾確認
+- `answers.txt` への回答追記
+
+## Discord通知（任意）
+
+```bash
+DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." \
+./ralph-loop/ralph.sh "codex exec --full-auto" 20
+```
+
+Discordを使わない場合でも、同等の通知は `events.log` に保存され、Webパネルから確認できます。
