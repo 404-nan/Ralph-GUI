@@ -2,6 +2,7 @@ import { bootstrapSystem } from './bootstrap.ts';
 import { assessConfig, loadConfig, type AppConfig } from '../config.ts';
 import { FileStateStore } from '../state/store.ts';
 import { RunActions } from '../actions/run-actions.ts';
+import type { RuntimeSettings } from '../shared/types.ts';
 
 type RalphCommand =
   | 'start'
@@ -204,7 +205,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     'start-run': { startPanel: false, startSupervisor: false, startDiscord: false, autoStartRun: false },
     configure: { startPanel: false, startSupervisor: false, startDiscord: false, autoStartRun: false },
     panel: { startPanel: true, startSupervisor: false, startDiscord: false, autoStartRun: false },
-    supervisor: { startPanel: false, startSupervisor: true, startDiscord: false, autoStartRun: true },
+    supervisor: { startPanel: false, startSupervisor: true, startDiscord: false, autoStartRun: false },
     discord: { startPanel: false, startSupervisor: false, startDiscord: true, autoStartRun: false },
     demo: { startPanel: true, startSupervisor: true, startDiscord: false, autoStartRun: true },
     status: { startPanel: false, startSupervisor: false, startDiscord: false, autoStartRun: false },
@@ -290,8 +291,36 @@ async function configureRuntime(config: AppConfig, overrides: Partial<AppConfig>
   );
 }
 
-async function printCheck(config: AppConfig, json: boolean): Promise<void> {
-  const assessment = assessConfig(config);
+function mergeAssessmentSettings(
+  settings: RuntimeSettings,
+  overrides: Partial<AppConfig>,
+): RuntimeSettings {
+  return {
+    ...settings,
+    taskName: overrides.taskName ?? settings.taskName,
+    agentCommand: overrides.agentCommand ?? settings.agentCommand,
+    promptFile: overrides.promptFile ?? settings.promptFile,
+    maxIterations: overrides.maxIterations ?? settings.maxIterations,
+    idleSeconds: overrides.idleSeconds ?? settings.idleSeconds,
+    mode: overrides.mode ?? settings.mode,
+  };
+}
+
+async function printCheck(config: AppConfig, overrides: Partial<AppConfig>, json: boolean): Promise<void> {
+  const store = new FileStateStore(config);
+  const settings = mergeAssessmentSettings(store.readSettings(), overrides);
+  const assessment = assessConfig(
+    {
+      ...config,
+      taskName: settings.taskName,
+      agentCommand: settings.agentCommand,
+      promptFile: settings.promptFile,
+      maxIterations: settings.maxIterations,
+      idleSeconds: settings.idleSeconds,
+      mode: settings.mode,
+    },
+    settings,
+  );
 
   if (json) {
     console.log(JSON.stringify(assessment, null, 2));
@@ -366,7 +395,7 @@ async function main() {
   }
 
   if (parsed.command === 'check') {
-    await printCheck(config, parsed.json);
+    await printCheck(config, parsed.overrides, parsed.json);
     return;
   }
 

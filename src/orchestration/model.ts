@@ -1,5 +1,4 @@
 import type {
-  AgentLaneSnapshot,
   BlockerRecord,
   OrchestrationSnapshot,
   PromptInjectionItem,
@@ -59,7 +58,7 @@ export function buildOrchestrationSnapshot(
   const unfinishedTasks = sortedTasks.filter((task) => task.status !== 'completed');
   const maxIntegration = deriveMaxIntegration(unfinishedTasks.length || sortedTasks.length);
   const pendingTasks = unfinishedTasks.filter((task) => task.status === 'pending');
-  const activeIds = new Set(pendingTasks.slice(0, 1).map((task) => task.id));
+  const activeIds = new Set(pendingTasks.slice(0, maxIntegration).map((task) => task.id));
 
   const taskBoard: TaskBoardItem[] = sortedTasks.map((task) => {
     const displayStatus =
@@ -74,107 +73,12 @@ export function buildOrchestrationSnapshot(
     return {
       ...task,
       displayStatus,
-      laneId: displayStatus === 'active' ? `worker-${pendingTasks.indexOf(task) + 1}` : undefined,
     };
   });
 
   const activeTasks = taskBoard.filter((task) => task.displayStatus === 'active');
   const queuedTasks = taskBoard.filter((task) => task.displayStatus === 'queued');
   const completedTasks = taskBoard.filter((task) => task.displayStatus === 'completed');
-
-  const agentLanes: AgentLaneSnapshot[] = [];
-  const now = input.status.updatedAt;
-
-  agentLanes.push({
-    id: 'supervisor',
-    name: '監督レーン',
-    role: 'supervisor',
-    status:
-      input.status.lifecycle === 'completed'
-        ? 'done'
-        : input.status.lifecycle === 'failed' || input.status.lifecycle === 'aborted'
-          ? 'blocked'
-          : input.status.control === 'paused'
-            ? 'waiting'
-            : 'thinking',
-    focus: input.status.currentStatusText || '全体の進行を監督し、次の一手を振り分けています',
-    load: activeTasks.length + input.pendingQuestions.length + input.blockerCount,
-    capacity: Math.max(1, maxIntegration),
-    taskIds: activeTasks.slice(0, 2).map((task) => task.id),
-    updatedAt: now,
-  });
-
-  agentLanes.push({
-    id: 'planner',
-    name: '計画レーン',
-    role: 'planner',
-    status:
-      input.pendingQuestions.length > 0
-        ? 'waiting'
-        : queuedTasks.length > 0 || activeTasks.length > 0
-          ? 'thinking'
-          : input.status.lifecycle === 'completed'
-            ? 'done'
-            : 'idle',
-    focus:
-      input.pendingQuestions.length > 0
-        ? `${input.pendingQuestions.length} 件の人間回答待ちがあります`
-        : queuedTasks.length > 0
-          ? `${queuedTasks.length} 件のTaskを次回に回します`
-          : 'Taskの流れは整理済みです',
-    load: queuedTasks.length + input.pendingQuestions.length,
-    capacity: Math.max(1, maxIntegration),
-    taskIds: queuedTasks.slice(0, 3).map((task) => task.id),
-    updatedAt: now,
-  });
-
-  for (let index = 0; index < maxIntegration; index += 1) {
-    const task = activeTasks[index];
-    agentLanes.push({
-      id: `worker-${index + 1}`,
-      name: `実行レーン ${index + 1}`,
-      role: 'worker',
-      status:
-        task?.displayStatus === 'active'
-          ? 'thinking'
-          : input.status.lifecycle === 'completed'
-            ? 'done'
-            : input.status.control === 'paused'
-              ? 'waiting'
-              : 'idle',
-      focus: task ? task.title : '次のTaskを受け取れる待機枠です',
-      load: task ? 1 : 0,
-      capacity: 1,
-      taskIds: task ? [task.id] : [],
-      updatedAt: now,
-    });
-  }
-
-  agentLanes.push({
-    id: 'integrator',
-    name: '統合レーン',
-    role: 'integrator',
-    status:
-      input.blockers.length > 0
-        ? 'blocked'
-        : completedTasks.length > 0 && unfinishedTasks.length > 0
-          ? 'thinking'
-          : input.status.lifecycle === 'completed'
-            ? 'done'
-            : activeTasks.length > 0
-              ? 'waiting'
-              : 'idle',
-    focus:
-      input.blockers.length > 0
-        ? `${input.blockers.length} 件の要対応を切り出しています`
-        : completedTasks.length > 0
-          ? `${completedTasks.length} 件の完了Taskを取り込めます`
-          : 'まだ統合待ちの完了Taskはありません',
-    load: completedTasks.length + input.blockers.length,
-    capacity: maxIntegration,
-    taskIds: completedTasks.slice(-maxIntegration).map((task) => task.id),
-    updatedAt: now,
-  });
 
   const thinkingFrames = [
     input.status.thinkingText || input.status.currentStatusText || 'Ralph が Task の流れを組み直しています。',
@@ -207,7 +111,6 @@ export function buildOrchestrationSnapshot(
     completedTaskCount: completedTasks.length,
     queuedTaskCount: queuedTasks.length,
     taskBoard,
-    agentLanes,
     thinkingFrames: [...new Set(thinkingFrames.filter(Boolean))],
   };
 }

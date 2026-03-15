@@ -1,5 +1,5 @@
 import type { RunActions } from '../actions/run-actions.ts';
-import type { AppConfig } from '../config.ts';
+import { listDiscordOperatorUserIds, type AppConfig } from '../config.ts';
 import type { Notifier } from '../shared/notifier.ts';
 import type { BlockerRecord, QuestionRecord, RunStatus } from '../shared/types.ts';
 
@@ -30,6 +30,7 @@ interface ReadyEvent {
 interface MessageCreateEvent {
   channel_id: string;
   content: string;
+  guild_id?: string;
   author: {
     bot?: boolean;
     id: string;
@@ -46,6 +47,7 @@ interface InteractionCreateEvent {
   id: string;
   token: string;
   channel_id: string;
+  guild_id?: string;
   data?: {
     name?: string;
     options?: InteractionCommandOption[];
@@ -80,6 +82,26 @@ type CommandReply = (content: string) => Promise<void>;
 
 function canEditAgentCommandRemotely(config: AppConfig): boolean {
   return config.allowRuntimeAgentCommandOverride;
+}
+
+export function isDiscordOperatorAllowed(config: AppConfig, userId: string): boolean {
+  const operatorIds = listDiscordOperatorUserIds(config);
+  return operatorIds.length > 0 && operatorIds.includes(userId);
+}
+
+export function isDiscordOriginAllowed(config: AppConfig, guildId?: string): boolean {
+  const allowedGuildId = config.discordGuildId.trim();
+  if (!allowedGuildId) {
+    return true;
+  }
+
+  return guildId === allowedGuildId;
+}
+
+function discordPermissionMessage(config: AppConfig): string {
+  return listDiscordOperatorUserIds(config).length === 0
+    ? 'Discord 操作ユーザーが未設定です。RALPH_DISCORD_ALLOWED_USER_IDS か RALPH_DISCORD_DM_USER_ID を設定してください'
+    : 'この Discord アカウントには操作権限がありません';
 }
 
 function describeCommandError(error: unknown): string {
@@ -372,12 +394,19 @@ function commandDefinitions(config: AppConfig): SlashCommandDefinition[] {
   return commands;
 }
 
+const MAX_RECONNECT_ATTEMPTS = 10;
+const RECONNECT_BASE_DELAY_MS = 5000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+
 export class DiscordBridge implements Notifier {
   private gateway: WebSocket | null = null;
   private heartbeatHandle: NodeJS.Timeout | null = null;
   private sequence: number | null = null;
   private dmChannelId: string | null = null;
   private applicationId: string | null = null;
+  private reconnectAttempts = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private intentionallyClosed = false;
   private readonly config: AppConfig;
   private readonly actions: RunActions;
   private readonly hooks: { onAbort?: () => void };
@@ -399,14 +428,59 @@ export class DiscordBridge implements Notifier {
       return;
     }
 
+    this.intentionallyClosed = false;
+    this.connectGateway();
+  }
+
+  stop(): void {
+    this.intentionallyClosed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopHeartbeat();
+    if (this.gateway) {
+      this.gateway.close();
+      this.gateway = null;
+    }
+  }
+
+  private connectGateway(): void {
     this.gateway = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
     this.gateway.addEventListener('message', (event) => {
       void this.onGatewayMessage(String(event.data));
     });
     this.gateway.addEventListener('close', () => {
       this.stopHeartbeat();
-      console.log('discord: gateway closed');
+      if (this.intentionallyClosed) {
+        console.log('discord: gateway closed (intentional)');
+        return;
+      }
+      console.log('discord: gateway closed unexpectedly');
+      this.scheduleReconnect();
     });
+    this.gateway.addEventListener('error', (event) => {
+      console.error('discord: gateway error', event);
+    });
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.error(`discord: ${MAX_RECONNECT_ATTEMPTS} 回の再接続に失敗しました。手動で再起動してください`);
+      return;
+    }
+
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
+      RECONNECT_MAX_DELAY_MS,
+    );
+    this.reconnectAttempts += 1;
+    console.log(`discord: ${delay / 1000}秒後に再接続を試みます (${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connectGateway();
+    }, delay);
   }
 
   async notifyRunStarted(status: RunStatus): Promise<void> {
@@ -449,8 +523,10 @@ export class DiscordBridge implements Notifier {
     if (payload.t === 'READY') {
       const ready = payload.d as ReadyEvent;
       this.applicationId = ready.application?.id ?? this.applicationId;
+      const wasReconnect = this.reconnectAttempts > 0;
+      this.reconnectAttempts = 0;
       await this.registerSlashCommands();
-      await this.sendNotification('🤖 RalphLoop の Discord 連携を開始しました');
+      await this.sendNotification(wasReconnect ? '🔄 RalphLoop の Discord 連携を再接続しました' : '🤖 RalphLoop の Discord 連携を開始しました');
       return;
     }
 
@@ -507,21 +583,18 @@ export class DiscordBridge implements Notifier {
     this.gateway.send(JSON.stringify(payload));
   }
 
-  private isUserAllowed(userId: string): boolean {
-    if (this.config.discordAllowedUserIds.length === 0) {
-      return true;
-    }
-
-    return this.config.discordAllowedUserIds.includes(userId);
-  }
-
   private async handleIncomingMessage(event: MessageCreateEvent): Promise<void> {
     if (event.author.bot || !event.content.startsWith('/')) {
       return;
     }
 
-    if (!this.isUserAllowed(event.author.id)) {
-      await this.sendMessage(event.channel_id, 'この Discord アカウントには操作権限がありません');
+    if (!isDiscordOriginAllowed(this.config, event.guild_id)) {
+      await this.sendMessage(event.channel_id, 'この Discord サーバーからの操作は許可されていません');
+      return;
+    }
+
+    if (!isDiscordOperatorAllowed(this.config, event.author.id)) {
+      await this.sendMessage(event.channel_id, discordPermissionMessage(this.config));
       return;
     }
 
@@ -549,8 +622,13 @@ export class DiscordBridge implements Notifier {
       return;
     }
 
-    if (!this.isUserAllowed(userId)) {
-      await this.respondToInteraction(event.id, event.token, 'この Discord アカウントには操作権限がありません');
+    if (!isDiscordOriginAllowed(this.config, event.guild_id)) {
+      await this.respondToInteraction(event.id, event.token, 'この Discord サーバーからの操作は許可されていません');
+      return;
+    }
+
+    if (!isDiscordOperatorAllowed(this.config, userId)) {
+      await this.respondToInteraction(event.id, event.token, discordPermissionMessage(this.config));
       return;
     }
 
@@ -781,8 +859,13 @@ export class DiscordBridge implements Notifier {
 
     if (command === 'task-edit') {
       const taskId = rest[0];
+      if (!taskId) {
+        await reply('使い方: /task-edit T-001 タイトル | 説明');
+        return;
+      }
+
       const draft = splitTaskDraft(restRaw.slice(taskId.length).trim());
-      if (!taskId || !draft.title) {
+      if (!draft.title) {
         await reply('使い方: /task-edit T-001 タイトル | 説明');
         return;
       }

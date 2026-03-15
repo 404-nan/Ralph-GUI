@@ -4,7 +4,7 @@
 
 常用できる趣味ツールとして、少ない仕組みで Codex 運用を安定させることを優先しています。
 
-- 1 repo / 1 supervisor run を中心に据えつつ、panel では Task レーンを multi-agent 的に可視化
+- 1 repo / 1 supervisor run を中心に据えつつ、panel では current / next / active task window を見やすくする
 - file based state
 - 回答待ちがあっても止めない
 - Web と Discord は同じ action layer を使う
@@ -60,11 +60,11 @@ Web と Discord はここだけを呼びます。
 
 ### `src/orchestration`
 
-Task board と lane view を導出します。
+Task board と active task window を導出します。
 
 - `MaxIntegration` を task 数から導出
 - 現在 / 待機 / 完了 の Task board を構築
-- supervisor / planner / worker / integrator の lane snapshot を作る
+- prompt と panel に出す active task 群を決める
 - `Thinking Stream` 用の frame を返す
 
 ### `src/parser`
@@ -86,7 +86,7 @@ Codex 出力から `[[STATUS]]`, `[[THINKING]]`, `[[TASK]]` などの structured
 - marker を action layer に流す
 - question 未回答でも loop を継続
 
-実行自体は依然として 1 child command を turn ごとに扱います。multi-agent は panel / prompt / task board 側の orchestration model です。
+実行自体は依然として 1 child command を turn ごとに扱います。`MaxIntegration` は複数 child process ではなく、panel と prompt で「いま同時に意識する Task の幅」を示します。
 常駐 service は queued run を state から拾って実行します。
 
 ### `src/panel`
@@ -94,11 +94,10 @@ Codex 出力から `[[STATUS]]`, `[[THINKING]]`, `[[TASK]]` などの structured
 軽量 HTTP サーバーです。
 
 - orchestration dashboard 表示
-- agent constellation 表示
 - Task board 表示
 - 現在のTask / 次のTask 表示
 - Task の作成 / 編集 / 完了 / 差し戻し
-- 初回ガイド表示
+- README / PRD / issue / メモの貼り付け preview と一括 import
 - runtime settings 編集
 - start run
 - answer

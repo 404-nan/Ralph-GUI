@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -94,7 +94,11 @@ test('RunActions derives MaxIntegration from prd task volume', async () => {
 
   assert.equal(dashboard.status.totalTaskCount, 4);
   assert.equal(dashboard.status.maxIntegration, 3);
-  assert.equal(dashboard.agentLanes.filter((lane) => lane.role === 'worker').length, 3);
+  assert.equal(dashboard.status.activeTaskCount, 3);
+  assert.deepEqual(
+    dashboard.taskBoard.filter((task) => task.displayStatus === 'active').map((task) => task.id),
+    ['US-001', 'US-002', 'US-003'],
+  );
 
   rmSync(rootDir, { recursive: true, force: true });
 });
@@ -174,6 +178,29 @@ test('RunActions requestRunStart clears previous run artifacts', async () => {
   rmSync(rootDir, { recursive: true, force: true });
 });
 
+test('RunActions requestRunStart preserves unread local inbox entries for the next run', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+
+  const config = makeConfig(rootDir);
+  config.taskCatalogFile = '';
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  writeFileSync(join(config.stateDir, 'note-inbox.txt'), '次の run では panel を優先\n', 'utf8');
+
+  const result = await actions.requestRunStart({ source: 'test' });
+  const dashboard = await actions.getDashboardData();
+
+  assert.equal(result.started, true);
+  assert.equal(store.readManualNotes().length, 1);
+  assert.equal(dashboard.promptInjectionQueue[0]?.text, '次の run では panel を優先');
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
 test('RunActions requestRunStart rejects duplicate queued runs', async () => {
   const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
@@ -190,6 +217,27 @@ test('RunActions requestRunStart rejects duplicate queued runs', async () => {
   assert.equal(first.started, true);
   assert.equal(second.started, false);
   assert.equal(second.message, 'run はすでに待機列にあります');
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions rejects answers for unknown questions', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+
+  const config = makeConfig(rootDir);
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  await actions.recordQuestion('既存の質問');
+
+  await assert.rejects(
+    actions.submitAnswer('Q-999', '存在しない質問への回答', { source: 'test' }),
+    /指定した質問が見つかりません/,
+  );
+  assert.equal(store.readAnswers().length, 0);
 
   rmSync(rootDir, { recursive: true, force: true });
 });
@@ -216,6 +264,28 @@ test('RunActions requestRunStart rejects invalid prompt settings', async () => {
 
   assert.equal(result.started, false);
   assert.match(result.message, /promptFile が見つかりません/);
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions pauseRun rejects idle runs instead of deadlocking future starts', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+
+  const config = makeConfig(rootDir);
+  config.taskCatalogFile = '';
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  await assert.rejects(
+    actions.pauseRun({ source: 'test' }),
+    /pause できる run は現在ありません/,
+  );
+
+  const result = await actions.requestRunStart({ source: 'test' });
+  assert.equal(result.started, true);
 
   rmSync(rootDir, { recursive: true, force: true });
 });
@@ -301,6 +371,7 @@ test('RunActions creates, updates, completes, and reopens tasks while tracking c
   const afterComplete = await actions.getDashboardData();
   assert.equal(afterComplete.currentTask?.id, 'US-002');
   assert.equal(afterComplete.taskBoard.find((task) => task.id === 'US-001')?.displayStatus, 'completed');
+  assert.match(store.readStatus().currentStatusText, /次は US-002/);
 
   await actions.reopenTask('US-001', { source: 'test' });
   const afterReopen = await actions.getDashboardData();
@@ -415,6 +486,119 @@ test('RunActions previews and imports tasks from pasted specs in order', async (
   assert.equal(dashboard.currentTask?.id, 'T-001');
   assert.equal(dashboard.nextTask?.id, 'T-002');
   assert.equal(dashboard.taskBoard[1]?.summary, 'API');
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions imports appended local inbox answers without skipping later lines', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+
+  const config = makeConfig(rootDir);
+  config.taskCatalogFile = '';
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  await actions.recordQuestion('Q1');
+  await actions.recordQuestion('Q2');
+
+  const inboxPath = join(config.stateDir, 'answer-inbox.jsonl');
+  writeFileSync(
+    inboxPath,
+    `${JSON.stringify({ questionId: 'Q-001', answer: 'A1' })}\n`,
+    'utf8',
+  );
+  await actions.getDashboardData();
+
+  writeFileSync(
+    inboxPath,
+    [
+      JSON.stringify({ questionId: 'Q-001', answer: 'A1' }),
+      JSON.stringify({ questionId: 'Q-002', answer: 'A2' }),
+    ].join('\n') + '\n',
+    'utf8',
+  );
+  await actions.getDashboardData();
+
+  assert.deepEqual(
+    store.readAnswers().map((answer) => answer.questionId),
+    ['Q-001', 'Q-002'],
+  );
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions retries invalid inbox lines after the file is corrected', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+
+  const config = makeConfig(rootDir);
+  config.taskCatalogFile = '';
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  await actions.recordQuestion('Q1');
+
+  const inboxPath = join(config.stateDir, 'answer-inbox.jsonl');
+  writeFileSync(inboxPath, '{ broken json }\n', 'utf8');
+  await actions.getDashboardData();
+  assert.equal(store.readAnswers().length, 0);
+  assert.equal(store.readInboxOffsets().answersLineOffset, 0);
+
+  writeFileSync(
+    inboxPath,
+    `${JSON.stringify({ questionId: 'Q-001', answer: 'A1' })}\n`,
+    'utf8',
+  );
+  await actions.getDashboardData();
+
+  assert.equal(store.readAnswers().length, 1);
+  assert.equal(store.readInboxOffsets().answersLineOffset, 1);
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions getDashboardData does not rewrite state files when nothing changed', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+  writeFileSync(
+    join(rootDir, 'prd.json'),
+    JSON.stringify(
+      {
+        userStories: [
+          { id: 'US-001', title: 'seed task', priority: 1, passes: false },
+        ],
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+
+  const config = makeConfig(rootDir);
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  await actions.getDashboardData();
+
+  const statusPath = join(config.stateDir, 'status.json');
+  const tasksPath = join(config.stateDir, 'tasks.json');
+  const updatedAt = store.readStatus().updatedAt;
+  const statusMtime = statSync(statusPath).mtimeMs;
+  const tasksMtime = statSync(tasksPath).mtimeMs;
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await actions.getDashboardData();
+
+  assert.equal(store.readStatus().updatedAt, updatedAt);
+  assert.equal(statSync(statusPath).mtimeMs, statusMtime);
+  assert.equal(statSync(tasksPath).mtimeMs, tasksMtime);
 
   rmSync(rootDir, { recursive: true, force: true });
 });

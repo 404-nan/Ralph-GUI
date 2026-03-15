@@ -15,8 +15,6 @@ export type RunMode = 'command' | 'demo';
 export type TaskPriority = 'critical' | 'high' | 'medium' | 'low';
 export type StoredTaskStatus = 'pending' | 'blocked' | 'completed';
 export type DisplayTaskStatus = 'active' | 'queued' | 'blocked' | 'completed';
-export type AgentLaneStatus = 'idle' | 'thinking' | 'waiting' | 'blocked' | 'done';
-export type AgentRole = 'supervisor' | 'planner' | 'worker' | 'integrator';
 
 export interface RunStatus {
   runId: string;
@@ -125,18 +123,6 @@ export interface TaskBoardItem extends TaskRecord {
   laneId?: string;
 }
 
-export interface AgentLaneSnapshot {
-  id: string;
-  name: string;
-  role: AgentRole;
-  status: AgentLaneStatus;
-  focus: string;
-  load: number;
-  capacity: number;
-  taskIds: string[];
-  updatedAt: string;
-}
-
 export interface OrchestrationSnapshot {
   maxIntegration: number;
   totalTaskCount: number;
@@ -144,7 +130,6 @@ export interface OrchestrationSnapshot {
   completedTaskCount: number;
   queuedTaskCount: number;
   taskBoard: TaskBoardItem[];
-  agentLanes: AgentLaneSnapshot[];
   thinkingFrames: string[];
 }
 
@@ -175,7 +160,6 @@ export interface DashboardData {
   recentEvents: EventRecord[];
   agentLogTail: string[];
   taskBoard: TaskBoardItem[];
-  agentLanes: AgentLaneSnapshot[];
   thinkingFrames: string[];
 }
 

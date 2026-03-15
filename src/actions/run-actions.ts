@@ -16,17 +16,19 @@ import type {
   RuntimeSettings,
   RunStatus,
   RunMode,
-  StoredTaskStatus,
   TaskBoardItem,
   TaskRecord,
 } from '../shared/types.ts';
 import { FileStateStore } from '../state/store.ts';
-import { loadTaskSeeds } from '../tasks/catalog.ts';
-import { parseTasksFromSpecText, type TaskImportPreview } from '../tasks/importer.ts';
+import type { TaskImportPreview } from '../tasks/importer.ts';
+import {
+  TaskManager,
+  parseTaskMarker,
+  type ActionActor,
+  type TaskDraftInput,
+} from './task-manager.ts';
 
-export interface ActionActor {
-  source: string;
-}
+export type { ActionActor, TaskDraftInput } from './task-manager.ts';
 
 export interface RuntimeSettingsInput {
   taskName?: string;
@@ -36,80 +38,6 @@ export interface RuntimeSettingsInput {
   maxIterations?: number;
   idleSeconds?: number;
   mode?: RunMode;
-}
-
-export interface TaskDraftInput {
-  title?: string;
-  summary?: string;
-  acceptanceCriteria?: string[];
-}
-
-interface ParsedTaskMarker {
-  id: string;
-  title: string;
-  status: StoredTaskStatus;
-}
-
-function orderTasks(tasks: TaskRecord[]): TaskRecord[] {
-  return [...tasks].sort((left, right) => {
-    const orderDelta = left.sortIndex - right.sortIndex;
-    if (orderDelta !== 0) {
-      return orderDelta;
-    }
-
-    return left.id.localeCompare(right.id);
-  });
-}
-
-function resequenceTasks(tasks: TaskRecord[]): void {
-  tasks.forEach((task, index) => {
-    task.sortIndex = index + 1;
-  });
-}
-
-function normalizeTaskStatus(value?: string): StoredTaskStatus {
-  if (value === 'completed' || value === 'done') {
-    return 'completed';
-  }
-
-  if (value === 'blocked') {
-    return 'blocked';
-  }
-
-  return 'pending';
-}
-
-function parseTaskMarker(content: string): ParsedTaskMarker | null {
-  const parts = content
-    .split('|')
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (parts.length === 0) {
-    return null;
-  }
-
-  if (parts.length === 1) {
-    return {
-      id: parts[0],
-      title: parts[0],
-      status: 'pending',
-    };
-  }
-
-  if (parts.length === 2) {
-    return {
-      id: parts[0],
-      title: parts[1],
-      status: 'pending',
-    };
-  }
-
-  return {
-    id: parts[0],
-    status: normalizeTaskStatus(parts[1].toLowerCase()),
-    title: parts.slice(2).join(' | '),
-  };
 }
 
 function renderOrchestrationSummary(
@@ -157,10 +85,12 @@ function renderOrchestrationSummary(
 export class RunActions {
   readonly store: FileStateStore;
   readonly config: AppConfig;
+  readonly tasks: TaskManager;
 
   constructor(store: FileStateStore, config: AppConfig) {
     this.store = store;
     this.config = config;
+    this.tasks = new TaskManager(store, config, this.appendEvent.bind(this));
   }
 
   async getDashboardData(): Promise<DashboardData> {
@@ -181,13 +111,13 @@ export class RunActions {
     const promptInjectionQueue = this.listPromptInjectionQueue();
     const orchestration = buildOrchestrationSnapshot({
       status,
-      tasks: this.synchronizeTaskCatalog(),
+      tasks: this.tasks.synchronizeTaskCatalog(),
       pendingQuestions,
       blockers,
       promptInjectionQueue,
     });
-    const currentTask = this.findCurrentTask(orchestration.taskBoard);
-    const nextTask = this.findNextTask(orchestration.taskBoard);
+    const currentTask = this.tasks.findCurrentTask(orchestration.taskBoard);
+    const nextTask = this.tasks.findNextTask(orchestration.taskBoard);
 
     return {
       status,
@@ -204,7 +134,6 @@ export class RunActions {
       recentEvents: (await this.store.listRecentEvents(40)).reverse(),
       agentLogTail: (await this.store.readAgentOutputTail(80)).filter(Boolean),
       taskBoard: orchestration.taskBoard,
-      agentLanes: orchestration.agentLanes,
       thinkingFrames: orchestration.thinkingFrames,
     };
   }
@@ -273,60 +202,22 @@ export class RunActions {
   }
 
   async createTask(input: TaskDraftInput, actor: ActionActor): Promise<TaskRecord> {
-    const tasks = this.synchronizeTaskCatalog();
-    const record = this.buildTaskRecord(tasks, input, actor);
-    tasks.push(record);
-    this.store.writeTasks(tasks);
-    await this.appendEvent('task.created', 'info', `${record.id}: ${record.title}`, {
-      source: actor.source,
-      taskId: record.id,
-    });
+    const record = await this.tasks.createTask(input, actor);
     this.refreshStatusCounters();
     return record;
   }
 
   async previewTaskImport(specText: string): Promise<TaskImportPreview> {
-    return parseTasksFromSpecText(specText);
+    return this.tasks.previewTaskImport(specText);
   }
 
   async importTasksFromSpec(
     specText: string,
     actor: ActionActor,
   ): Promise<{ preview: TaskImportPreview; tasks: TaskRecord[] }> {
-    const preview = parseTasksFromSpecText(specText);
-    if (preview.tasks.length === 0) {
-      throw new Error('Task に分解できる項目が見つかりませんでした');
-    }
-
-    const tasks = this.synchronizeTaskCatalog();
-    const created = preview.tasks.map((draft) => {
-      const record = this.buildTaskRecord(tasks, draft, actor);
-      tasks.push(record);
-      return record;
-    });
-
-    this.store.writeTasks(tasks);
-
-    const status = this.store.readStatus();
-    status.currentStatusText = `${created.length} 件のTaskを仕様書から追加しました`;
-    status.thinkingText = status.currentStatusText;
-    status.updatedAt = nowIso();
-    this.store.writeStatus(status);
-
-    await this.appendEvent(
-      'task.imported',
-      'info',
-      `${created.length} 件のTaskを仕様書から追加しました`,
-      {
-        source: actor.source,
-        count: created.length,
-        format: preview.format,
-        truncated: preview.truncated,
-      },
-    );
-
+    const result = await this.tasks.importTasksFromSpec(specText, actor);
     this.refreshStatusCounters();
-    return { preview, tasks: created };
+    return result;
   }
 
   async updateTask(
@@ -334,125 +225,31 @@ export class RunActions {
     input: TaskDraftInput,
     actor: ActionActor,
   ): Promise<TaskRecord | null> {
-    const tasks = this.synchronizeTaskCatalog();
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) {
-      return null;
-    }
-
-    const nextTitle = input.title?.trim();
-    const nextSummary = input.summary?.trim();
-    const seed = loadTaskSeeds(this.config).find((item) => item.id === taskId);
-    if (nextTitle) {
-      task.title = nextTitle;
-      task.titleOverride = seed ? (nextTitle === seed.title ? undefined : nextTitle) : undefined;
-    }
-    if (nextSummary !== undefined) {
-      const summary = nextSummary || task.title;
-      task.summary = summary;
-      task.summaryOverride = seed ? (summary === seed.summary ? undefined : summary) : undefined;
-    }
-    task.updatedAt = nowIso();
-    task.source = actor.source;
-
-    this.store.writeTasks(tasks);
-    await this.appendEvent('task.updated', 'info', `${task.id}: ${task.title}`, {
-      source: actor.source,
-      taskId: task.id,
-    });
+    const result = await this.tasks.updateTask(taskId, input, actor);
     this.refreshStatusCounters();
-    return task;
+    return result;
   }
 
   async completeTask(taskId: string, actor: ActionActor): Promise<TaskRecord | null> {
-    const tasks = this.synchronizeTaskCatalog();
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) {
-      return null;
-    }
-
-    task.status = 'completed';
-    task.completedAt = nowIso();
-    task.updatedAt = task.completedAt;
-    task.source = actor.source;
-    this.store.writeTasks(tasks);
-
-    const nextTask = this.findNextTask(buildOrchestrationSnapshot({
-      status: this.store.readStatus(),
-      tasks,
-      pendingQuestions: this.listPendingQuestions(),
-      blockers: this.store.readBlockers(),
-      promptInjectionQueue: this.listPromptInjectionQueue(),
-    }).taskBoard);
-
-    const status = this.store.readStatus();
-    status.currentStatusText = nextTask
-      ? `${task.id} を完了しました。次は ${nextTask.id} に進みます`
-      : `${task.id} を完了しました。残りのTaskはありません`;
-    status.thinkingText = status.currentStatusText;
-    status.updatedAt = nowIso();
-    this.store.writeStatus(status);
-
-    await this.appendEvent('task.completed', 'info', `${task.id}: ${task.title}`, {
-      source: actor.source,
-      taskId: task.id,
+    const result = await this.tasks.completeTask(taskId, actor, {
+      listPendingQuestions: () => this.listPendingQuestions(),
+      readBlockers: () => this.store.readBlockers(),
+      listPromptInjectionQueue: () => this.listPromptInjectionQueue(),
     });
     this.refreshStatusCounters();
-    return task;
+    return result;
   }
 
   async reopenTask(taskId: string, actor: ActionActor): Promise<TaskRecord | null> {
-    const tasks = this.synchronizeTaskCatalog();
-    const task = tasks.find((item) => item.id === taskId);
-    if (!task) {
-      return null;
-    }
-
-    task.status = 'pending';
-    task.completedAt = undefined;
-    task.updatedAt = nowIso();
-    task.source = actor.source;
-    this.store.writeTasks(tasks);
-    await this.appendEvent('task.reopened', 'warning', `${task.id}: ${task.title}`, {
-      source: actor.source,
-      taskId: task.id,
-    });
+    const result = await this.tasks.reopenTask(taskId, actor);
     this.refreshStatusCounters();
-    return task;
+    return result;
   }
 
   async moveTask(taskId: string, position: 'front' | 'back', actor: ActionActor): Promise<TaskRecord | null> {
-    const tasks = this.synchronizeTaskCatalog();
-    const ordered = orderTasks(tasks);
-    const taskIndex = ordered.findIndex((item) => item.id === taskId);
-    if (taskIndex === -1) {
-      return null;
-    }
-
-    const [task] = ordered.splice(taskIndex, 1);
-    ordered.splice(position === 'front' ? 0 : ordered.length, 0, task);
-    resequenceTasks(ordered);
-    task.updatedAt = nowIso();
-    task.source = actor.source;
-    this.store.writeTasks(ordered);
-
-    const directionLabel = position === 'front' ? '最優先へ移動しました' : '後ろへ回しました';
-    await this.appendEvent('task.reordered', 'info', `${task.id}: ${directionLabel}`, {
-      source: actor.source,
-      taskId: task.id,
-      position,
-    });
-
-    const status = this.store.readStatus();
-    status.currentStatusText =
-      position === 'front'
-        ? `${task.id} を最優先にしました`
-        : `${task.id} を後ろへ回しました`;
-    status.thinkingText = status.currentStatusText;
-    status.updatedAt = nowIso();
-    this.store.writeStatus(status);
+    const result = await this.tasks.moveTask(taskId, position, actor);
     this.refreshStatusCounters();
-    return task;
+    return result;
   }
 
   async requestRunStart(
@@ -519,7 +316,7 @@ export class RunActions {
     status.thinkingText = 'Ralph は待機中です。最初のTaskから着手できます。';
     this.store.writeStatus(status);
 
-    this.synchronizeTaskCatalog();
+    this.tasks.synchronizeTaskCatalog();
     await this.appendEvent('run.requested', 'info', `${actor.source} が run 開始を要求しました`, {
       source: actor.source,
     });
@@ -553,8 +350,12 @@ export class RunActions {
 
   async pauseRun(actor: ActionActor): Promise<RunStatus> {
     const status = this.store.readStatus();
+    if (!['starting', 'running', 'pause_requested'].includes(status.lifecycle)) {
+      throw new Error('pause できる run は現在ありません');
+    }
+
     status.control = 'paused';
-    status.lifecycle = status.lifecycle === 'running' ? 'pause_requested' : 'paused';
+    status.lifecycle = 'pause_requested';
     status.phase = 'paused';
     status.thinkingText = '一時停止中です。Task と状態は保持しています。';
     status.updatedAt = nowIso();
@@ -565,8 +366,12 @@ export class RunActions {
 
   async resumeRun(actor: ActionActor): Promise<RunStatus> {
     const status = this.store.readStatus();
+    if (status.control !== 'paused' && !['paused', 'pause_requested'].includes(status.lifecycle)) {
+      throw new Error('resume できる run は現在ありません');
+    }
+
     status.control = 'running';
-    status.lifecycle = status.lifecycle === 'paused' ? 'running' : status.lifecycle;
+    status.lifecycle = 'running';
     status.phase = 'running';
     status.thinkingText = '再開しました。現在のTaskから続けます。';
     status.updatedAt = nowIso();
@@ -577,6 +382,13 @@ export class RunActions {
 
   async abortRun(actor: ActionActor): Promise<RunStatus> {
     const status = this.store.readStatus();
+    const canAbort =
+      status.phase === 'queued'
+      || ['starting', 'running', 'pause_requested', 'paused'].includes(status.lifecycle);
+    if (!canAbort) {
+      throw new Error('中断できる run は現在ありません');
+    }
+
     status.control = 'abort_requested';
     status.lifecycle = 'aborted';
     status.phase = 'aborted';
@@ -592,6 +404,22 @@ export class RunActions {
     const questions = this.store.readQuestions();
     const answers = this.store.readAnswers();
     const timestamp = nowIso();
+    const normalizedQuestionId = questionId.trim();
+    const normalizedAnswer = answer.trim();
+    if (!normalizedQuestionId || !normalizedAnswer) {
+      throw new Error('質問IDと回答の両方が必要です');
+    }
+
+    const question = questions.find((item) => item.id === normalizedQuestionId);
+
+    if (!question) {
+      throw new Error(`指定した質問が見つかりません: ${normalizedQuestionId}`);
+    }
+
+    if (question.status === 'answered') {
+      throw new Error(`${normalizedQuestionId} にはすでに回答があります`);
+    }
+
     const answerId = nextSequentialId(
       'A',
       answers.map((item) => item.id),
@@ -599,8 +427,8 @@ export class RunActions {
 
     const record: AnswerRecord = {
       id: answerId,
-      questionId,
-      answer,
+      questionId: normalizedQuestionId,
+      answer: normalizedAnswer,
       createdAt: timestamp,
       source: actor.source,
     };
@@ -608,18 +436,15 @@ export class RunActions {
     answers.push(record);
     this.store.writeAnswers(answers);
 
-    const question = questions.find((item) => item.id === questionId);
-    if (question) {
-      question.status = 'answered';
-      question.answerId = record.id;
-      question.answeredAt = timestamp;
-      this.store.writeQuestions(questions);
-    }
+    question.status = 'answered';
+    question.answerId = record.id;
+    question.answeredAt = timestamp;
+    this.store.writeQuestions(questions);
 
     await this.appendEvent(
       'question.answered',
       'info',
-      `${questionId} に回答が追加されました`,
+      `${normalizedQuestionId} に回答が追加されました`,
       { source: actor.source, answerId },
     );
     this.refreshStatusCounters();
@@ -868,54 +693,15 @@ export class RunActions {
   }
 
   async recordTaskSignal(content: string, source: string = 'agent'): Promise<void> {
-    const parsed = parseTaskMarker(content);
-    if (!parsed) {
-      await this.appendEvent('task.invalid', 'warning', `task marker を解釈できませんでした: ${content}`);
-      return;
-    }
-
-    const tasks = this.synchronizeTaskCatalog();
-    const timestamp = nowIso();
-    const existing = tasks.find((task) => task.id === parsed.id);
-
-    if (existing) {
-      existing.title = parsed.title || existing.title;
-      existing.summary = parsed.title || existing.summary;
-      existing.status = parsed.status;
-      existing.updatedAt = timestamp;
-      existing.completedAt = parsed.status === 'completed' ? timestamp : undefined;
-      existing.source = source;
-    } else {
-      tasks.push({
-        id: parsed.id,
-        title: parsed.title,
-        summary: parsed.title,
-        priority: 'medium',
-        sortIndex: tasks.reduce((max, task) => Math.max(max, task.sortIndex), 0) + 1,
-        status: parsed.status,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        completedAt: parsed.status === 'completed' ? timestamp : undefined,
-        source,
-        acceptanceCriteria: [],
-      });
-    }
-
-    this.store.writeTasks(tasks);
-    await this.appendEvent(
-      'task.updated',
-      'info',
-      `${parsed.id}: ${parsed.status} / ${parsed.title}`,
-      { taskId: parsed.id, taskStatus: parsed.status },
-    );
+    await this.tasks.recordTaskSignal(content, source);
     this.refreshStatusCounters();
   }
 
   async markDone(message: string): Promise<void> {
-    const currentTask = this.findCurrentTask(
+    const currentTask = this.tasks.findCurrentTask(
       buildOrchestrationSnapshot({
         status: this.store.readStatus(),
-        tasks: this.synchronizeTaskCatalog(),
+        tasks: this.tasks.synchronizeTaskCatalog(),
         pendingQuestions: this.listPendingQuestions(),
         blockers: this.store.readBlockers(),
         promptInjectionQueue: this.listPromptInjectionQueue(),
@@ -954,7 +740,7 @@ export class RunActions {
     status.maxIterations = settings.maxIterations;
     status.thinkingText = 'Task の流れを確認し、最初のTaskに担当を割り当てています。';
     this.store.writeStatus(status);
-    this.synchronizeTaskCatalog();
+    this.tasks.synchronizeTaskCatalog();
     await this.appendEvent('run.started', 'info', 'supervisor を開始しました', {
       mode: this.config.mode,
     });
@@ -1007,123 +793,53 @@ export class RunActions {
     const offsets = this.store.readInboxOffsets();
     const answerLines = await this.store.readAnswerInboxLines();
     const noteLines = await this.store.readNoteInboxLines();
+    let nextAnswerOffset =
+      offsets.answersLineOffset > answerLines.length ? 0 : offsets.answersLineOffset;
+    let nextNoteOffset =
+      offsets.notesLineOffset > noteLines.length ? 0 : offsets.notesLineOffset;
 
-    const newAnswerLines = answerLines
-      .slice(offsets.answersLineOffset)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const newNoteLines = noteLines
-      .slice(offsets.notesLineOffset)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    for (let index = nextAnswerOffset; index < answerLines.length; index += 1) {
+      const line = answerLines[index]?.trim() ?? '';
+      if (!line) {
+        nextAnswerOffset = index + 1;
+        continue;
+      }
 
-    for (const line of newAnswerLines) {
       try {
         const payload = JSON.parse(line) as { questionId?: string; answer?: string };
-        if (payload.questionId && payload.answer) {
-          await this.submitAnswer(payload.questionId, payload.answer, { source: 'file' });
+        if (!payload.questionId?.trim() || !payload.answer?.trim()) {
+          throw new Error('questionId と answer の両方が必要です');
         }
-      } catch {
-        await this.appendEvent('file.answer.invalid', 'warning', `answer-inbox.jsonl の行を読み取れませんでした: ${line}`);
+
+        await this.submitAnswer(payload.questionId, payload.answer, { source: 'file' });
+        nextAnswerOffset = index + 1;
+      } catch (error) {
+        await this.appendEvent(
+          'file.answer.invalid',
+          'warning',
+          `answer-inbox.jsonl の ${index + 1} 行目を読み取れませんでした: ${error instanceof Error ? error.message : line}`,
+        );
+        break;
       }
     }
 
-    for (const line of newNoteLines) {
+    for (let index = nextNoteOffset; index < noteLines.length; index += 1) {
+      const line = noteLines[index]?.trim() ?? '';
+      if (!line) {
+        nextNoteOffset = index + 1;
+        continue;
+      }
+
       await this.enqueueManualNote(line, { source: 'file' });
+      nextNoteOffset = index + 1;
     }
 
-    if (newAnswerLines.length > 0 || newNoteLines.length > 0) {
+    if (nextAnswerOffset !== offsets.answersLineOffset || nextNoteOffset !== offsets.notesLineOffset) {
       this.store.writeInboxOffsets({
-        answersLineOffset: answerLines.length,
-        notesLineOffset: noteLines.length,
+        answersLineOffset: nextAnswerOffset,
+        notesLineOffset: nextNoteOffset,
       });
     }
-  }
-
-  private synchronizeTaskCatalog(): TaskRecord[] {
-    const timestamp = nowIso();
-    const existingTasks = this.store.readTasks();
-    const seeds = loadTaskSeeds(this.config);
-
-    if (seeds.length === 0) {
-      return existingTasks;
-    }
-
-    const existingById = new Map(existingTasks.map((task) => [task.id, task]));
-    const seedIds = new Set(seeds.map((seed) => seed.id));
-
-    const merged: TaskRecord[] = seeds.map((seed) => {
-      const existing = existingById.get(seed.id);
-      const nextStatus =
-        seed.status === 'completed'
-          ? 'completed'
-          : existing?.status === 'completed'
-            ? 'completed'
-            : existing?.status === 'blocked'
-            ? 'blocked'
-            : 'pending';
-      const nextTitle = existing?.titleOverride ?? seed.title;
-      const nextSummary = existing?.summaryOverride ?? seed.summary;
-      const nextNotes = existing?.notes ?? seed.notes;
-
-      return {
-        id: seed.id,
-        title: nextTitle,
-        summary: nextSummary,
-        priority: seed.priority,
-        sortIndex: existing?.sortIndex ?? seed.sortIndex,
-        status: nextStatus,
-        createdAt: existing?.createdAt ?? timestamp,
-        updatedAt:
-          existing &&
-          existing.title === nextTitle &&
-          existing.summary === nextSummary &&
-          existing.notes === nextNotes &&
-          existing.status === nextStatus
-            ? existing.updatedAt
-            : timestamp,
-        source: existing?.source ?? seed.source,
-        acceptanceCriteria: seed.acceptanceCriteria,
-        notes: nextNotes,
-        titleOverride: existing?.titleOverride,
-        summaryOverride: existing?.summaryOverride,
-        completedAt: nextStatus === 'completed' ? existing?.completedAt ?? timestamp : undefined,
-      };
-    });
-
-    const manualTasks = existingTasks.filter((task) => !seedIds.has(task.id));
-    const catalog = [...merged, ...manualTasks];
-    this.store.writeTasks(catalog);
-    return catalog;
-  }
-
-  private buildTaskRecord(tasks: TaskRecord[], input: TaskDraftInput, actor: ActionActor): TaskRecord {
-    const title = input.title?.trim();
-    if (!title) {
-      throw new Error('Task 名を入力してください');
-    }
-
-    const nextIndex = tasks.reduce((max, task) => Math.max(max, task.sortIndex), 0) + 1;
-    const timestamp = nowIso();
-    const taskId = nextSequentialId(
-      'T',
-      tasks
-        .map((task) => task.id)
-        .filter((id) => /^T-\d+$/.test(id)),
-    );
-
-    return {
-      id: taskId,
-      title,
-      summary: input.summary?.trim() || title,
-      priority: 'high',
-      sortIndex: nextIndex,
-      status: 'pending',
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      source: actor.source,
-      acceptanceCriteria: (input.acceptanceCriteria ?? []).map((item) => item.trim()).filter(Boolean),
-    };
   }
 
   private applyRuntimeSettings(settings: RuntimeSettings): void {
@@ -1161,13 +877,14 @@ export class RunActions {
 
   private refreshStatusCounters(): RunStatus {
     const status = this.store.readStatus();
+    const previous = JSON.stringify(status);
     const questions = this.store.readQuestions();
     const pendingQuestions = questions.filter((question) => question.status === 'pending');
     const blockers = this.store.readBlockers();
     const promptInjectionQueue = this.listPromptInjectionQueue();
     const orchestration = buildOrchestrationSnapshot({
       status,
-      tasks: this.synchronizeTaskCatalog(),
+      tasks: this.tasks.synchronizeTaskCatalog(),
       pendingQuestions,
       blockers,
       promptInjectionQueue,
@@ -1183,35 +900,18 @@ export class RunActions {
     status.queuedTaskCount = orchestration.queuedTaskCount;
     status.maxIntegration = orchestration.maxIntegration;
     status.thinkingText = status.thinkingText || orchestration.thinkingFrames[0];
-    status.updatedAt = nowIso();
-    this.store.writeStatus(status);
+    if (JSON.stringify(status) !== previous) {
+      this.store.writeStatus(status);
+    }
     return status;
   }
 
   private findCurrentTask(taskBoard: TaskBoardItem[]): TaskBoardItem | undefined {
-    return taskBoard.find((task) => task.displayStatus === 'active')
-      ?? taskBoard.find((task) => task.displayStatus === 'queued');
+    return this.tasks.findCurrentTask(taskBoard);
   }
 
   private findNextTask(taskBoard: TaskBoardItem[]): TaskBoardItem | undefined {
-    const currentTask = this.findCurrentTask(taskBoard);
-    if (!currentTask) {
-      return undefined;
-    }
-
-    let seenCurrent = false;
-    for (const task of taskBoard) {
-      if (task.id === currentTask.id) {
-        seenCurrent = true;
-        continue;
-      }
-
-      if (seenCurrent && task.displayStatus !== 'completed') {
-        return task;
-      }
-    }
-
-    return undefined;
+    return this.tasks.findNextTask(taskBoard);
   }
 
   private async appendEvent(

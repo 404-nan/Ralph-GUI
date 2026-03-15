@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import type { RunMode } from './shared/types.ts';
+import type { RunMode, RuntimeSettings } from './shared/types.ts';
 
 export interface AppConfig {
   rootDir: string;
@@ -43,6 +43,11 @@ export interface ConfigAssessment {
     warning: number;
     error: number;
   };
+}
+
+interface TaskCatalogInspection {
+  level: ConfigCheckItem['level'];
+  message: string;
 }
 
 function loadEnvFile(rootDir: string): void {
@@ -116,6 +121,71 @@ function pushConfigCheck(
   items.push({ key, level, message });
 }
 
+function countUsableTaskCatalogStories(payload: unknown): number {
+  if (!payload || typeof payload !== 'object') {
+    return 0;
+  }
+
+  const userStories = (payload as { userStories?: unknown }).userStories;
+  if (!Array.isArray(userStories)) {
+    return 0;
+  }
+
+  return userStories.filter((story) => {
+    if (!story || typeof story !== 'object') {
+      return false;
+    }
+
+    const record = story as { id?: unknown; title?: unknown };
+    return typeof record.id === 'string' && record.id.trim() && typeof record.title === 'string' && record.title.trim();
+  }).length;
+}
+
+function inspectTaskCatalogFile(taskCatalogFile: string): TaskCatalogInspection {
+  if (!taskCatalogFile) {
+    return {
+      level: 'warning',
+      message: 'task catalog は未設定です。空の Task board から始まります',
+    };
+  }
+
+  if (!existsSync(taskCatalogFile)) {
+    return {
+      level: 'error',
+      message: `task catalog が見つかりません: ${taskCatalogFile}`,
+    };
+  }
+
+  try {
+    const payload = JSON.parse(readFileSync(taskCatalogFile, 'utf8')) as unknown;
+    const usableStories = countUsableTaskCatalogStories(payload);
+
+    if (usableStories === 0) {
+      return {
+        level: 'warning',
+        message: `task catalog は読めますが、取り込める userStories がありません: ${taskCatalogFile}`,
+      };
+    }
+
+    return {
+      level: 'ok',
+      message: `task catalog: ${taskCatalogFile} (${usableStories} tasks)`,
+    };
+  } catch (error) {
+    return {
+      level: 'error',
+      message: `task catalog を読み取れません: ${taskCatalogFile} / ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export function listDiscordOperatorUserIds(config: AppConfig): string[] {
+  const ids = [config.discordDmUserId, ...config.discordAllowedUserIds]
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
 export function loadConfig(rootDir: string = process.cwd()): AppConfig {
   loadEnvFile(rootDir);
 
@@ -160,42 +230,50 @@ export function loadConfig(rootDir: string = process.cwd()): AppConfig {
   };
 }
 
-export function assessConfig(config: AppConfig): ConfigAssessment {
+export function assessConfig(
+  config: AppConfig,
+  runtimeSettings?: Partial<
+    Pick<RuntimeSettings, 'taskName' | 'agentCommand' | 'promptFile' | 'promptBody' | 'mode'>
+  >,
+): ConfigAssessment {
   const items: ConfigCheckItem[] = [];
+  const taskName = runtimeSettings?.taskName ?? config.taskName;
+  const mode = runtimeSettings?.mode ?? config.mode;
+  const promptFile = runtimeSettings?.promptFile ?? config.promptFile;
+  const promptBody = runtimeSettings?.promptBody ?? '';
+  const agentCommand = runtimeSettings?.agentCommand ?? config.agentCommand;
+  const discordOperatorIds = listDiscordOperatorUserIds(config);
 
-  if (config.taskName.trim()) {
-    pushConfigCheck(items, 'taskName', 'ok', `Task 名: ${config.taskName}`);
+  if (taskName.trim()) {
+    pushConfigCheck(items, 'taskName', 'ok', `Task 名: ${taskName}`);
   } else {
     pushConfigCheck(items, 'taskName', 'error', 'RALPH_TASK_NAME が空です');
   }
 
-  if (config.mode === 'command' || config.mode === 'demo') {
-    pushConfigCheck(items, 'mode', 'ok', `実行モード: ${config.mode}`);
+  if (mode === 'command' || mode === 'demo') {
+    pushConfigCheck(items, 'mode', 'ok', `実行モード: ${mode}`);
   } else {
-    pushConfigCheck(items, 'mode', 'error', `未対応の実行モードです: ${config.mode}`);
+    pushConfigCheck(items, 'mode', 'error', `未対応の実行モードです: ${mode}`);
   }
 
-  if (config.promptFile.trim() && existsSync(config.promptFile)) {
-    pushConfigCheck(items, 'promptFile', 'ok', `promptFile: ${config.promptFile}`);
+  if (promptBody.trim()) {
+    pushConfigCheck(items, 'promptFile', 'ok', 'state/settings.json に prompt 上書きが設定されています');
+  } else if (promptFile.trim() && existsSync(promptFile)) {
+    pushConfigCheck(items, 'promptFile', 'ok', `promptFile: ${promptFile}`);
   } else {
-    pushConfigCheck(items, 'promptFile', 'error', `promptFile が見つかりません: ${config.promptFile}`);
+    pushConfigCheck(items, 'promptFile', 'error', `promptFile が見つかりません: ${promptFile}`);
   }
 
-  if (config.mode === 'demo') {
+  if (mode === 'demo') {
     pushConfigCheck(items, 'agentCommand', 'ok', 'デモモードのため agentCommand は不要です');
-  } else if (config.agentCommand.trim()) {
-    pushConfigCheck(items, 'agentCommand', 'ok', `agentCommand: ${config.agentCommand}`);
+  } else if (agentCommand.trim()) {
+    pushConfigCheck(items, 'agentCommand', 'ok', `agentCommand: ${agentCommand}`);
   } else {
     pushConfigCheck(items, 'agentCommand', 'error', '通常実行では RALPH_AGENT_COMMAND が必要です');
   }
 
-  if (!config.taskCatalogFile) {
-    pushConfigCheck(items, 'taskCatalog', 'warning', 'task catalog は未設定です。空の Task board から始まります');
-  } else if (existsSync(config.taskCatalogFile)) {
-    pushConfigCheck(items, 'taskCatalog', 'ok', `task catalog: ${config.taskCatalogFile}`);
-  } else {
-    pushConfigCheck(items, 'taskCatalog', 'error', `task catalog が見つかりません: ${config.taskCatalogFile}`);
-  }
+  const taskCatalog = inspectTaskCatalogFile(config.taskCatalogFile);
+  pushConfigCheck(items, 'taskCatalog', taskCatalog.level, taskCatalog.message);
 
   if (config.panelHost.trim()) {
     pushConfigCheck(items, 'panelHost', 'ok', `panel: http://${config.panelHost}:${config.panelPort}`);
@@ -222,7 +300,10 @@ export function assessConfig(config: AppConfig): ConfigAssessment {
     if (!config.panelUsername.trim() || !config.panelPassword.trim()) {
       pushConfigCheck(items, 'runtimeAgentCommandPanelRisk', 'warning', 'runtime agentCommand 変更を許可するなら panel Basic 認証を推奨します');
     }
-    if (config.discordEnabled && config.discordAllowedUserIds.length === 0) {
+    if (config.discordEnabled && discordOperatorIds.length > 0 && !config.discordGuildId.trim()) {
+      pushConfigCheck(items, 'runtimeAgentCommandDiscordRisk', 'warning', 'runtime agentCommand 変更を許可するなら Discord の guild 制限を推奨します');
+    }
+    if (config.discordEnabled && discordOperatorIds.length === 0) {
       pushConfigCheck(items, 'runtimeAgentCommandDiscordRisk', 'warning', 'runtime agentCommand 変更を許可するなら Discord の許可ユーザー制限を推奨します');
     }
   } else {
@@ -233,10 +314,22 @@ export function assessConfig(config: AppConfig): ConfigAssessment {
     pushConfigCheck(items, 'discord', 'warning', 'Discord 連携は無効です。Web panel のみで動作します');
   } else {
     pushConfigCheck(items, 'discord', 'ok', 'Discord token が設定されています');
+    if (discordOperatorIds.length === 0) {
+      pushConfigCheck(items, 'discordOperators', 'warning', 'Discord 操作ユーザーが未設定のため、通知専用モードで動作します');
+    } else {
+      pushConfigCheck(items, 'discordOperators', 'ok', `Discord 操作ユーザー: ${discordOperatorIds.length} 人`);
+    }
     if (!config.discordApplicationId.trim()) {
       pushConfigCheck(items, 'discordApplicationId', 'warning', 'RALPH_DISCORD_APPLICATION_ID が空です');
     } else {
       pushConfigCheck(items, 'discordApplicationId', 'ok', `discord application: ${config.discordApplicationId}`);
+    }
+    if (!config.discordGuildId.trim() && discordOperatorIds.length > 0) {
+      pushConfigCheck(items, 'discordGuild', 'warning', 'Discord の guild 制限は無効です。許可ユーザーは任意の guild / DM から操作できます');
+    } else if (!config.discordGuildId.trim()) {
+      pushConfigCheck(items, 'discordGuild', 'ok', 'Discord は通知専用のため guild 制限は不要です');
+    } else {
+      pushConfigCheck(items, 'discordGuild', 'ok', `discord guild: ${config.discordGuildId}`);
     }
 
     if (!config.discordNotifyChannelId.trim() && !config.discordDmUserId.trim()) {

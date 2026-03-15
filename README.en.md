@@ -35,12 +35,13 @@ npm link
 - Lets operators push a task to the front or send it to the back directly from the panel
 - Lets the loop continue after `[[QUESTION]]`, then injects answers or notes once into the next prompt
 - Exposes the same action layer to the web panel and Discord bridge
-- Uses one quick composer with live intent preview and browser-local draft persistence for notes, tasks, and answers
+- Lets operators paste a README, PRD, issue, or notes into the panel, preview the parsed tasks, and import them directly
 
 ## Main Docs
 
 - Japanese guide: [README.md](./README.md)
 - Minimal example: [examples/minimal/README.md](./examples/minimal/README.md)
+- Task catalog / PRD guide: [docs/task-catalog.md](./docs/task-catalog.md)
 - Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - Release checklist: [docs/releasing.md](./docs/releasing.md)
 - Contributing: [CONTRIBUTING.md](./CONTRIBUTING.md)

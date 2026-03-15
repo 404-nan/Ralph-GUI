@@ -26,6 +26,18 @@ interface InboxOffsets {
   notesLineOffset: number;
 }
 
+function splitInboxLines(content: string): string[] {
+  if (!content) {
+    return [];
+  }
+
+  const lines = content.split(/\r?\n/);
+  if (lines.at(-1) === '') {
+    lines.pop();
+  }
+  return lines;
+}
+
 function defaultStatus(config: AppConfig): RunStatus {
   return {
     runId: '',
@@ -212,11 +224,8 @@ export class FileStateStore {
     this.writeAnswers([]);
     this.writeManualNotes([]);
     this.writeBlockers([]);
-    this.writeInboxOffsets({ answersLineOffset: 0, notesLineOffset: 0 });
     writeFileSync(this.eventsPath, '', 'utf8');
     writeFileSync(this.agentOutputPath, '', 'utf8');
-    writeFileSync(this.answerInboxPath, '', 'utf8');
-    writeFileSync(this.noteInboxPath, '', 'utf8');
   }
 
   readInboxOffsets(): InboxOffsets {
@@ -232,12 +241,12 @@ export class FileStateStore {
 
   async readAnswerInboxLines(): Promise<string[]> {
     const content = await this.readFileOrEmpty(this.answerInboxPath);
-    return content.split('\n');
+    return splitInboxLines(content);
   }
 
   async readNoteInboxLines(): Promise<string[]> {
     const content = await this.readFileOrEmpty(this.noteInboxPath);
-    return content.split('\n');
+    return splitInboxLines(content);
   }
 
   private readJson<T>(filePath: string): T | null {

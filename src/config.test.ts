@@ -104,3 +104,41 @@ test('assessConfig warns when runtime agent command override is enabled without 
     'warning',
   );
 });
+
+test('assessConfig fails when task catalog JSON is malformed', () => {
+  const config = createBaseConfig();
+  config.taskCatalogFile = join(config.rootDir, 'broken-task-catalog.json');
+  writeFileSync(config.taskCatalogFile, '{ not json', 'utf8');
+
+  const assessment = assessConfig(config);
+
+  assert.equal(assessment.ok, false);
+  assert.equal(
+    assessment.items.find((item) => item.key === 'taskCatalog')?.level,
+    'error',
+  );
+  assert.match(
+    assessment.items.find((item) => item.key === 'taskCatalog')?.message || '',
+    /task catalog を読み取れません/,
+  );
+});
+
+test('assessConfig honors persisted prompt overrides when runtime settings are supplied', () => {
+  const config = createBaseConfig();
+  config.promptFile = join(config.rootDir, 'missing-prompt.md');
+
+  const assessment = assessConfig(config, {
+    promptFile: config.promptFile,
+    promptBody: 'inline prompt override',
+  });
+
+  assert.equal(assessment.ok, true);
+  assert.equal(
+    assessment.items.find((item) => item.key === 'promptFile')?.level,
+    'ok',
+  );
+  assert.match(
+    assessment.items.find((item) => item.key === 'promptFile')?.message || '',
+    /prompt 上書き/,
+  );
+});

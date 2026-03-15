@@ -16,9 +16,10 @@
 ## panel で最低限確認すること
 
 - `いまやること` が current status に応じて切り替わる
-- `クイック送信` からメモ / Task / 回答が送れる
+- pending question へその場で回答できる
+- メモ送信が動く
 - Task の作成 / 編集 / 完了 / reopen が動く
-- pending question が来たときに回答先 select が更新される
+- README / PRD / issue / メモを貼って preview と import が動く
 - `実行開始 / 一時停止 / 再開 / 中断` の可否が状態依存で切り替わる
 - `agentCommand` が固定設定のとき、panel では read-only として表示される
 
