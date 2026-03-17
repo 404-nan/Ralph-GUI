@@ -119,6 +119,98 @@ test('ralph configure persists the agent execution directory override', () => {
   }
 });
 
+test('ralph reset clears runtime data and recreates shareable state files', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-cli-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), '# prompt\n', 'utf8');
+
+  const config = loadConfig(rootDir);
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+  await actions.updateRuntimeSettings(
+    {
+      taskName: 'custom task',
+      maxIterations: 9,
+      idleSeconds: 1,
+      discordNotifyChannelId: '123456',
+    },
+    { source: 'test' },
+  );
+  store.writeQuestions([
+    {
+      id: 'Q-001',
+      text: 'pending question',
+      status: 'pending',
+      createdAt: '2026-03-17T00:00:00.000Z',
+      source: 'test',
+    },
+  ]);
+  store.writeTasks([
+    {
+      id: 'TASK-001',
+      title: 'dirty task',
+      summary: 'dirty task',
+      priority: 'medium',
+      status: 'queued',
+      createdAt: '2026-03-17T00:00:00.000Z',
+      updatedAt: '2026-03-17T00:00:00.000Z',
+      source: 'test',
+      acceptanceCriteria: [],
+    },
+  ]);
+  writeFileSync(join(rootDir, 'state', 'answer-inbox.jsonl'), '{"value":1}\n', 'utf8');
+  writeFileSync(join(rootDir, 'state', 'note-inbox.txt'), 'dirty note\n', 'utf8');
+  writeFileSync(join(rootDir, 'state', 'events.jsonl'), '{"type":"dirty"}\n', 'utf8');
+  writeFileSync(join(rootDir, 'logs', 'agent-output.log'), 'dirty log\n', 'utf8');
+
+  const result = spawnSync(
+    process.execPath,
+    ['--experimental-strip-types', CLI_PATH, 'reset'],
+    {
+      cwd: rootDir,
+      env: sanitizedEnv(),
+      encoding: 'utf8',
+    },
+  );
+
+  try {
+    assert.equal(result.status, 0, result.stderr);
+
+    const status = JSON.parse(readFileSync(join(rootDir, 'state', 'status.json'), 'utf8')) as {
+      lifecycle: string;
+      phase: string;
+      pendingQuestionCount: number;
+      totalTaskCount: number;
+      promptFile: string;
+    };
+    const questions = JSON.parse(readFileSync(join(rootDir, 'state', 'questions.json'), 'utf8')) as unknown[];
+    const tasks = JSON.parse(readFileSync(join(rootDir, 'state', 'tasks.json'), 'utf8')) as unknown[];
+    const settings = JSON.parse(readFileSync(join(rootDir, 'state', 'settings.json'), 'utf8')) as {
+      taskName: string;
+      promptFile: string;
+      discordNotifyChannelId: string;
+    };
+
+    assert.equal(status.lifecycle, 'idle');
+    assert.equal(status.phase, 'idle');
+    assert.equal(status.pendingQuestionCount, 0);
+    assert.equal(status.totalTaskCount, 0);
+    assert.equal(status.promptFile, 'prompts/supervisor.md');
+    assert.deepEqual(questions, []);
+    assert.deepEqual(tasks, []);
+    assert.equal(settings.taskName, 'Codex supervised run');
+    assert.equal(settings.promptFile, join(rootDir, 'prompts', 'supervisor.md'));
+    assert.equal(settings.discordNotifyChannelId, '');
+    assert.equal(readFileSync(join(rootDir, 'state', 'answer-inbox.jsonl'), 'utf8'), '');
+    assert.equal(readFileSync(join(rootDir, 'state', 'note-inbox.txt'), 'utf8'), '');
+    assert.equal(readFileSync(join(rootDir, 'state', 'events.jsonl'), 'utf8'), '');
+    assert.equal(readFileSync(join(rootDir, 'logs', 'agent-output.log'), 'utf8'), '');
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
 test('ralph supervisor starts the watcher without auto-queuing a run', async () => {
   const rootDir = mkdtempSync(join(tmpdir(), 'ralph-cli-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });

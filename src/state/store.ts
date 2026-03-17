@@ -9,6 +9,7 @@ import { readFile, appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { AppConfig } from '../config.ts';
+import { toPortableDisplayPath } from '../shared/path.ts';
 import { nowIso } from '../shared/time.ts';
 import type {
   AnswerRecord,
@@ -60,7 +61,7 @@ function defaultStatus(config: AppConfig): RunStatus {
     updatedAt: nowIso(),
     agentCommand: config.agentCommand,
     mode: config.mode,
-    promptFile: config.promptFile,
+    promptFile: toPortableDisplayPath(config.rootDir, config.promptFile),
     thinkingText: '',
   };
 }
@@ -237,6 +238,21 @@ export class FileStateStore {
     this.writeBlockers([]);
     writeFileSync(this.eventsPath, '', 'utf8');
     writeFileSync(this.agentOutputPath, '', 'utf8');
+  }
+
+  resetRuntimeData(): void {
+    this.writeStatus(defaultStatus(this.config));
+    this.writeQuestions([]);
+    this.writeAnswers([]);
+    this.writeManualNotes([]);
+    this.writeBlockers([]);
+    this.writeTasks([]);
+    this.writeSettings(this.defaultSettings());
+    this.writeInboxOffsets({ answersLineOffset: 0, notesLineOffset: 0 });
+    writeFileSync(this.eventsPath, '', 'utf8');
+    writeFileSync(this.agentOutputPath, '', 'utf8');
+    writeFileSync(this.answerInboxPath, '', 'utf8');
+    writeFileSync(this.noteInboxPath, '', 'utf8');
   }
 
   readInboxOffsets(): InboxOffsets {

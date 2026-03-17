@@ -118,7 +118,7 @@ explicit-agent --prompt "$PROMPT"
 
 ## 何ができるか
 
-- `start / run / start-run / configure / panel / supervisor / discord / demo / status / check` を 1 つの CLI で扱える
+- `start / run / start-run / configure / reset / panel / supervisor / discord / demo / status / check` を 1 つの CLI で扱える
 - Web panel と Discord が同じ action layer を使うので、どこから触っても state がぶれない
 - Task を現在・次・完了で管理し、panel 上で優先順位を前後できる
 - README / PRD / issue / 要件メモを panel に貼り、そのまま task catalog として preview / import できる
@@ -238,6 +238,7 @@ Discord token を設定すると gateway bot として動作します。
 ./ralph start-run "repo-wide rebuild"
 ./ralph configure --max-iterations 40 --idle-seconds 3
 ./ralph configure --cwd /abs/path/to/target-repo
+./ralph reset
 ./ralph status
 ./ralph check
 ./ralph demo
@@ -253,6 +254,7 @@ Discord token を設定すると gateway bot として動作します。
 - `./ralph` と `./ralph start` は同義です
 - `./ralph run` はサービス起動と同時に 1 回だけ run をキックします
 - `./ralph start-run` は既に起動している service へ queued run を追加します
+- `./ralph reset` は `state/` と `logs/` の運用データを初期化します
 - `./ralph check --json` と `./ralph status --json` が使えます
 
 ## `./ralph.sh` を使う最小 loop
@@ -311,6 +313,19 @@ state/note-inbox.txt
 state/events.jsonl
 logs/agent-output.log
 ```
+
+GitHub で共有する前提の state:
+
+```text
+state/status.json
+state/questions.json
+state/answers.json
+state/manual-notes.json
+state/blockers.json
+state/tasks.json
+```
+
+`state/settings.json`、inbox、events、`logs/agent-output.log` はローカル運用向けなので Git では無視されます。共有前にまっさらに戻したい場合は `./ralph reset` を使ってください。
 
 ## `ralph check` で確認すること
 

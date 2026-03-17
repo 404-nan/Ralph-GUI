@@ -2,8 +2,14 @@ dist/
 .env
 .tmp/
 node_modules/
-/logs/
-/state/
+/logs/*
+/state/*
 target/
 !logs/.gitkeep
 !state/.gitkeep
+!/state/status.json
+!/state/questions.json
+!/state/answers.json
+!/state/manual-notes.json
+!/state/blockers.json
+!/state/tasks.json

@@ -6,6 +6,7 @@ import { assessConfig, type AppConfig } from '../config.ts';
 import { parseStructuredMarkers } from '../parser/markers.ts';
 import { composePromptWithInjections } from '../prompt/composer.ts';
 import { createEventId, createRunId, nextSequentialId } from '../shared/id.ts';
+import { toPortableDisplayPath } from '../shared/path.ts';
 import { nowIso } from '../shared/time.ts';
 import type {
   AnswerRecord,
@@ -231,7 +232,9 @@ export class RunActions {
     status.maxIterations = next.maxIterations;
     status.agentCommand = next.agentCommand;
     status.mode = next.mode;
-    status.promptFile = next.promptBody.trim() ? '[画面またはDiscordからの prompt 上書き]' : next.promptFile;
+    status.promptFile = next.promptBody.trim()
+      ? '[画面またはDiscordからの prompt 上書き]'
+      : toPortableDisplayPath(this.config.rootDir, next.promptFile);
     status.updatedAt = nowIso();
     this.store.writeStatus(status);
 
@@ -358,7 +361,9 @@ export class RunActions {
     status.updatedAt = nowIso();
     status.agentCommand = settings.agentCommand;
     status.mode = settings.mode;
-    status.promptFile = settings.promptBody.trim() ? '[画面またはDiscordからの prompt 上書き]' : settings.promptFile;
+    status.promptFile = settings.promptBody.trim()
+      ? '[画面またはDiscordからの prompt 上書き]'
+      : toPortableDisplayPath(this.config.rootDir, settings.promptFile);
     status.thinkingText = 'Ralph は待機中です。最初のTaskから着手できます。';
     this.store.writeStatus(status);
 
@@ -782,7 +787,9 @@ export class RunActions {
     status.updatedAt = nowIso();
     status.agentCommand = settings.agentCommand;
     status.mode = settings.mode;
-    status.promptFile = settings.promptBody.trim() ? '[画面またはDiscordからの prompt 上書き]' : settings.promptFile;
+    status.promptFile = settings.promptBody.trim()
+      ? '[画面またはDiscordからの prompt 上書き]'
+      : toPortableDisplayPath(this.config.rootDir, settings.promptFile);
     status.maxIterations = settings.maxIterations;
     status.thinkingText = 'Task の流れを確認し、最初のTaskに担当を割り当てています。';
     this.store.writeStatus(status);

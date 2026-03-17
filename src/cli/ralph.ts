@@ -11,6 +11,7 @@ type RalphCommand =
   | 'run'
   | 'start-run'
   | 'configure'
+  | 'reset'
   | 'panel'
   | 'supervisor'
   | 'discord'
@@ -39,6 +40,7 @@ function renderHelp(): string {
     '  ralph run [task]         全体を起動してそのまま 1 回実行',
     '  ralph start-run [task]   既存サービスに実行予約を追加',
     '  ralph configure [opts]   サービスを起動せず実行設定だけ保存',
+    '  ralph reset              state / logs の運用データを初期化',
     '  ralph panel              Web パネルだけ起動',
     '  ralph supervisor         監督ループだけ起動',
     '  ralph discord            Discord 連携だけ起動',
@@ -48,7 +50,7 @@ function renderHelp(): string {
     '  ralph help               このヘルプを表示',
     '',
     '日本語エイリアス:',
-    '  起動=start  実行=run  実行予約=start-run  設定=configure  画面=panel',
+    '  起動=start  実行=run  実行予約=start-run  設定=configure  初期化=reset  画面=panel',
     '  監督=supervisor  ディスコード=discord  デモ=demo  状態=status  診断=check  ヘルプ=help',
     '',
     'オプション:',
@@ -88,6 +90,8 @@ function resolveCommand(value?: string): RalphCommand | null {
     実行予約: 'start-run',
     configure: 'configure',
     設定: 'configure',
+    reset: 'reset',
+    初期化: 'reset',
     panel: 'panel',
     画面: 'panel',
     supervisor: 'supervisor',
@@ -213,6 +217,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     run: { startPanel: true, startSupervisor: true, startDiscord: true, autoStartRun: true },
     'start-run': { startPanel: false, startSupervisor: false, startDiscord: false, autoStartRun: false },
     configure: { startPanel: false, startSupervisor: false, startDiscord: false, autoStartRun: false },
+    reset: { startPanel: false, startSupervisor: false, startDiscord: false, autoStartRun: false },
     panel: { startPanel: true, startSupervisor: false, startDiscord: false, autoStartRun: false },
     supervisor: { startPanel: false, startSupervisor: true, startDiscord: false, autoStartRun: false },
     discord: { startPanel: false, startSupervisor: false, startDiscord: true, autoStartRun: false },
@@ -326,6 +331,21 @@ async function configureRuntime(config: AppConfig, overrides: Partial<AppConfig>
   );
 }
 
+async function resetRuntimeData(config: AppConfig): Promise<void> {
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  store.resetRuntimeData();
+
+  console.log(
+    [
+      '運用データを初期化しました',
+      `state: ${config.stateDir}`,
+      `logs: ${config.logDir}`,
+      'Git で共有するデータは state/status.json・questions.json・answers.json・manual-notes.json・blockers.json・tasks.json です',
+    ].join('\n'),
+  );
+}
+
 function mergeAssessmentSettings(
   config: AppConfig,
   settings: RuntimeSettings,
@@ -425,6 +445,11 @@ async function main() {
 
   if (parsed.command === 'configure') {
     await configureRuntime(config, parsed.overrides);
+    return;
+  }
+
+  if (parsed.command === 'reset') {
+    await resetRuntimeData(config);
     return;
   }
 

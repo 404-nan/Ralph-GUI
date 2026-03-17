@@ -29,8 +29,9 @@ npm link
 
 ## What RalphLoop Does
 
-- Runs `start / run / start-run / configure / panel / supervisor / discord / demo / status / check` from one CLI
+- Runs `start / run / start-run / configure / reset / panel / supervisor / discord / demo / status / check` from one CLI
 - Keeps task status, questions, answers, blockers, logs, and runtime settings in flat files
+- Lets you reset runtime data with `./ralph reset` while keeping repo-shareable state files ready for Git
 - Prioritizes one current task and one next handoff instead of burying operators in generic dashboards
 - Lets operators push a task to the front or send it to the back directly from the panel
 - Lets the loop continue after `[[QUESTION]]`, then injects answers or notes once into the next prompt
