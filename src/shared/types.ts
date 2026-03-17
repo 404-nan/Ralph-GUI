@@ -118,6 +118,88 @@ export interface PromptInjectionItem {
   createdAt: string;
 }
 
+export interface DecisionChoiceView {
+  id: string;
+  label: string;
+  kind: 'answer' | 'custom';
+  answer?: string;
+}
+
+export interface DecisionView {
+  id: string;
+  title: string;
+  status: 'pending' | 'answered';
+  recommendedAnswer: string;
+  fallbackAnswer: string;
+  createdAt: string;
+  source: string;
+  choices: DecisionChoiceView[];
+}
+
+export interface ArtifactView {
+  id: string;
+  title: string;
+  summary: string;
+  tone: 'info' | 'success' | 'warning';
+  timestamp: string;
+}
+
+export interface ResourceView {
+  id: string;
+  label: string;
+  value: string;
+  detail?: string;
+  level: 'ok' | 'warning' | 'error';
+}
+
+export interface DashboardDiagnosticItem {
+  key: string;
+  level: 'ok' | 'warning' | 'error';
+  message: string;
+}
+
+export interface DashboardSurfaceLayer {
+  projectName: string;
+  projectPath: string;
+  modelLabel: string;
+  modelDetail: string;
+}
+
+export interface DashboardRunView {
+  runId: string;
+  requestLabel: string;
+  lifecycleLabel: string;
+  modeLabel: string;
+  currentTaskLabel: string;
+  nextTaskLabel: string;
+  activeTaskCount: number;
+  queuedTaskCount: number;
+  completedTaskCount: number;
+  pendingDecisionCount: number;
+  updatedAt: string;
+}
+
+export interface DashboardControlLayer {
+  run: DashboardRunView;
+  previewQueue: PromptInjectionItem[];
+}
+
+export interface DashboardPowerLayer {
+  resources: ResourceView[];
+  diagnostics: DashboardDiagnosticItem[];
+  panelUrl: string;
+  panelAuthEnabled: boolean;
+  canEditAgentCommand: boolean;
+  agentCommand: string;
+  promptSource: string;
+}
+
+export interface DashboardLayers {
+  surface: DashboardSurfaceLayer;
+  control: DashboardControlLayer;
+  power: DashboardPowerLayer;
+}
+
 export interface TaskBoardItem extends TaskRecord {
   displayStatus: DisplayTaskStatus;
   laneId?: string;
@@ -136,8 +218,10 @@ export interface OrchestrationSnapshot {
 export interface RuntimeSettings {
   taskName: string;
   agentCommand: string;
+  agentCwd: string;
   promptFile: string;
   promptBody: string;
+  discordNotifyChannelId: string;
   maxIterations: number;
   idleSeconds: number;
   mode: RunMode;
@@ -154,13 +238,16 @@ export interface DashboardData {
   currentTask?: TaskBoardItem;
   nextTask?: TaskBoardItem;
   pendingQuestions: QuestionRecord[];
+  pendingDecisions: DecisionView[];
   answeredQuestions: Array<QuestionRecord & { answer?: AnswerRecord }>;
   blockers: BlockerRecord[];
   promptInjectionQueue: PromptInjectionItem[];
   recentEvents: EventRecord[];
+  artifacts: ArtifactView[];
   agentLogTail: string[];
   taskBoard: TaskBoardItem[];
   thinkingFrames: string[];
+  layers: DashboardLayers;
 }
 
 export interface MarkerMatch {

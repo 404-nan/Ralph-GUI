@@ -13,4 +13,5 @@ while [[ -L "$SOURCE" ]]; do
 done
 
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+cd "$SCRIPT_DIR"
 exec node --experimental-strip-types "$SCRIPT_DIR/src/cli/ralph.ts" "$@"

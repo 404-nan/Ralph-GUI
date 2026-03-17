@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import { bootstrapSystem } from './bootstrap.ts';
 import { assessConfig, loadConfig, type AppConfig } from '../config.ts';
 import { FileStateStore } from '../state/store.ts';
@@ -52,6 +54,7 @@ function renderHelp(): string {
     'オプション:',
     '  --task <text>            実行する Task 名を上書き',
     '  --agent-command <cmd>    実行エージェントのコマンドを上書き',
+    '  --cwd <path>             agent を起動する実行ディレクトリを上書き',
     '  --prompt-file <path>     prompt ファイルのパスを上書き',
     '  --mode <command|demo>    実行モードを上書き',
     '  --panel-host <host>      panel の host を上書き',
@@ -150,6 +153,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
 
+    if (value === '--cwd' || value === '--agent-cwd') {
+      overrides.agentCwd = args[index + 1] ?? '';
+      index += 1;
+      continue;
+    }
+
     if (value === '--prompt-file') {
       overrides.promptFile = args[index + 1] ?? '';
       index += 1;
@@ -234,8 +243,46 @@ function applyOverrides(config: AppConfig, overrides: Partial<AppConfig>): AppCo
 
   return {
     ...merged,
+    agentCwd:
+      overrides.agentCwd !== undefined
+        ? resolve(config.rootDir, overrides.agentCwd || '.')
+        : merged.agentCwd,
     discordEnabled: (overrides.discordToken ?? merged.discordToken).length > 0,
   };
+}
+
+function hasRuntimeOverrides(overrides: Partial<AppConfig>): boolean {
+  return (
+    overrides.taskName !== undefined ||
+    overrides.agentCommand !== undefined ||
+    overrides.agentCwd !== undefined ||
+    overrides.promptFile !== undefined ||
+    overrides.maxIterations !== undefined ||
+    overrides.idleSeconds !== undefined ||
+    overrides.mode !== undefined
+  );
+}
+
+async function persistRuntimeOverrides(
+  config: AppConfig,
+  overrides: Partial<AppConfig>,
+): Promise<RuntimeSettings> {
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+  await actions.recoverInterruptedRun({ source: 'cli' });
+  return actions.updateRuntimeSettings(
+    {
+      taskName: overrides.taskName,
+      agentCommand: overrides.agentCommand,
+      agentCwd: overrides.agentCwd,
+      promptFile: overrides.promptFile,
+      maxIterations: overrides.maxIterations,
+      idleSeconds: overrides.idleSeconds,
+      mode: overrides.mode,
+    },
+    { source: 'cli' },
+  );
 }
 
 async function printStatus(config: AppConfig, json: boolean): Promise<void> {
@@ -259,32 +306,20 @@ async function printStatus(config: AppConfig, json: boolean): Promise<void> {
     `現在のTask: ${dashboard.currentTask ? `${dashboard.currentTask.id} ${dashboard.currentTask.title}` : '-'}`,
     `次のTask: ${dashboard.nextTask ? `${dashboard.nextTask.id} ${dashboard.nextTask.title}` : '-'}`,
     `質問: ${dashboard.status.pendingQuestionCount} 件待ち / ${dashboard.status.answeredQuestionCount} 件回答済み`,
+    `実行ディレクトリ: ${dashboard.settings.agentCwd}`,
     `思考: ${dashboard.thinkingFrames[0] ?? dashboard.status.currentStatusText ?? '-'}`,
   ].join('\n'));
 }
 
 async function configureRuntime(config: AppConfig, overrides: Partial<AppConfig>): Promise<void> {
-  const store = new FileStateStore(config);
-  await store.ensureInitialized();
-  const actions = new RunActions(store, config);
-  await actions.recoverInterruptedRun({ source: 'cli' });
-  const settings = await actions.updateRuntimeSettings(
-    {
-      taskName: overrides.taskName,
-      agentCommand: overrides.agentCommand,
-      promptFile: overrides.promptFile,
-      maxIterations: overrides.maxIterations,
-      idleSeconds: overrides.idleSeconds,
-      mode: overrides.mode,
-    },
-    { source: 'cli' },
-  );
+  const settings = await persistRuntimeOverrides(config, overrides);
 
   console.log(
     [
       '実行設定を更新しました',
       `Task: ${settings.taskName}`,
       `実行方式: ${settings.mode === 'demo' ? 'デモ' : '通常実行'}`,
+      `実行ディレクトリ: ${settings.agentCwd}`,
       `最大思考回数: ${settings.maxIterations}`,
       `待機秒数: ${settings.idleSeconds}`,
     ].join('\n'),
@@ -292,6 +327,7 @@ async function configureRuntime(config: AppConfig, overrides: Partial<AppConfig>
 }
 
 function mergeAssessmentSettings(
+  config: AppConfig,
   settings: RuntimeSettings,
   overrides: Partial<AppConfig>,
 ): RuntimeSettings {
@@ -299,6 +335,10 @@ function mergeAssessmentSettings(
     ...settings,
     taskName: overrides.taskName ?? settings.taskName,
     agentCommand: overrides.agentCommand ?? settings.agentCommand,
+    agentCwd:
+      overrides.agentCwd !== undefined
+        ? resolve(config.rootDir, overrides.agentCwd || '.')
+        : settings.agentCwd,
     promptFile: overrides.promptFile ?? settings.promptFile,
     maxIterations: overrides.maxIterations ?? settings.maxIterations,
     idleSeconds: overrides.idleSeconds ?? settings.idleSeconds,
@@ -308,12 +348,13 @@ function mergeAssessmentSettings(
 
 async function printCheck(config: AppConfig, overrides: Partial<AppConfig>, json: boolean): Promise<void> {
   const store = new FileStateStore(config);
-  const settings = mergeAssessmentSettings(store.readSettings(), overrides);
+  const settings = mergeAssessmentSettings(config, store.readSettings(), overrides);
   const assessment = assessConfig(
     {
       ...config,
       taskName: settings.taskName,
       agentCommand: settings.agentCommand,
+      agentCwd: settings.agentCwd,
       promptFile: settings.promptFile,
       maxIterations: settings.maxIterations,
       idleSeconds: settings.idleSeconds,
@@ -354,25 +395,8 @@ async function queueRun(config: AppConfig, overrides: Partial<AppConfig>): Promi
   const actions = new RunActions(store, config);
   await actions.recoverInterruptedRun({ source: 'cli' });
 
-  if (
-    overrides.taskName ||
-    overrides.agentCommand ||
-    overrides.promptFile ||
-    overrides.maxIterations ||
-    overrides.idleSeconds ||
-    overrides.mode
-  ) {
-    await actions.updateRuntimeSettings(
-      {
-        taskName: overrides.taskName,
-        agentCommand: overrides.agentCommand,
-        promptFile: overrides.promptFile,
-        maxIterations: overrides.maxIterations,
-        idleSeconds: overrides.idleSeconds,
-        mode: overrides.mode,
-      },
-      { source: 'cli' },
-    );
+  if (hasRuntimeOverrides(overrides)) {
+    await persistRuntimeOverrides(config, overrides);
   }
 
   const result = await actions.requestRunStart({ source: 'cli' });
@@ -407,6 +431,10 @@ async function main() {
   if (parsed.command === 'start-run') {
     await queueRun(config, parsed.overrides);
     return;
+  }
+
+  if (hasRuntimeOverrides(parsed.overrides)) {
+    await persistRuntimeOverrides(config, parsed.overrides);
   }
 
   await bootstrapSystem({

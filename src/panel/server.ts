@@ -6,6 +6,7 @@ import { renderPanelHtml } from './html.ts';
 
 export interface PanelServerHooks {
   onAbort?: () => void;
+  onDiscordReconnect?: () => Promise<void> | void;
 }
 
 const JSON_BODY_LIMIT = 1024 * 1024;
@@ -142,8 +143,11 @@ export function startPanelServer(
               {
                 taskName: typeof body.taskName === 'string' ? body.taskName : undefined,
                 agentCommand: typeof body.agentCommand === 'string' ? body.agentCommand : undefined,
+                agentCwd: typeof body.agentCwd === 'string' ? body.agentCwd : undefined,
                 promptFile: typeof body.promptFile === 'string' ? body.promptFile : undefined,
                 promptBody: typeof body.promptBody === 'string' ? body.promptBody : undefined,
+                discordNotifyChannelId:
+                  typeof body.discordNotifyChannelId === 'string' ? body.discordNotifyChannelId : undefined,
                 maxIterations:
                   body.maxIterations !== undefined ? Number.parseInt(String(body.maxIterations), 10) : undefined,
                 idleSeconds:
@@ -161,6 +165,21 @@ export function startPanelServer(
         } catch (error) {
           throw new HttpError(400, error instanceof Error ? error.message : '設定を更新できませんでした');
         }
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/discord/reconnect') {
+        if (!hooks.onDiscordReconnect) {
+          throw new HttpError(409, 'Discord bridge は現在起動していません');
+        }
+
+        try {
+          await hooks.onDiscordReconnect();
+        } catch (error) {
+          throw new HttpError(409, error instanceof Error ? error.message : 'Discord を再接続できませんでした');
+        }
+
+        writeJson(response, 200, { ok: true });
         return;
       }
 

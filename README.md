@@ -62,6 +62,7 @@ npm run check
 `.env.example` をコピーし、最低限ここを決めます。
 
 - `RALPH_AGENT_COMMAND`
+- `RALPH_AGENT_CWD`
 - `RALPH_PROMPT_FILE`
 - `RALPH_TASK_CATALOG_FILE` または panel から追加する Task
 
@@ -73,6 +74,7 @@ npm run check
 
 既定値は Codex 向けですが、コマンド自体は任意です。  
 RalphLoop は `agentCommand` をそのまま子プロセスとして起動し、prompt を `stdin` に流します。
+`RALPH_AGENT_CWD` を設定すると、別ディレクトリを作業対象にできます。
 
 ### エージェントコマンド例
 
@@ -97,6 +99,7 @@ qwen
 
 ```bash
 RALPH_AGENT_COMMAND=codex exec --full-auto --skip-git-repo-check
+RALPH_AGENT_CWD=.
 ```
 
 ### `stdin` を受けないエージェントを使う場合
@@ -219,6 +222,7 @@ Discord token を設定すると gateway bot として動作します。
 - `/set-iterations 40`
 - `/set-idle 3`
 - `/set-mode command`
+- `/set-cwd /abs/path/to/repo`
 - `/set-prompt-file /abs/path/to/prompt.md`
 - `/set-prompt ここに prompt 上書きを書く`
 - `/clear-prompt`
@@ -233,6 +237,7 @@ Discord token を設定すると gateway bot として動作します。
 ./ralph run "repo-wide rebuild"
 ./ralph start-run "repo-wide rebuild"
 ./ralph configure --max-iterations 40 --idle-seconds 3
+./ralph configure --cwd /abs/path/to/target-repo
 ./ralph status
 ./ralph check
 ./ralph demo

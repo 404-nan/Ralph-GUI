@@ -32,7 +32,7 @@ export class AgentRunner {
 
     return new Promise((resolve, reject) => {
       const child = spawn(this.config.agentCommand, {
-        cwd: this.config.rootDir,
+        cwd: this.config.agentCwd,
         detached: process.platform !== 'win32',
         shell: true,
         stdio: 'pipe',

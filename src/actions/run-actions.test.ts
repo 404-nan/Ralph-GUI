@@ -16,6 +16,7 @@ function makeConfig(rootDir: string): AppConfig {
     stateDir: join(rootDir, 'state'),
     logDir: join(rootDir, 'logs'),
     agentCommand: 'demo',
+    agentCwd: rootDir,
     mode: 'demo',
     maxIterations: 5,
     idleSeconds: 1,
@@ -126,6 +127,7 @@ test('RunActions starts empty when no task catalog is configured', async () => {
 test('RunActions updates runtime settings and exposes them in dashboard', async () => {
   const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  mkdirSync(join(rootDir, 'workspace'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
   const config = makeConfig(rootDir);
@@ -138,6 +140,8 @@ test('RunActions updates runtime settings and exposes them in dashboard', async 
       taskName: 'runtime task',
       maxIterations: 9,
       promptBody: 'inline prompt',
+      agentCwd: join(rootDir, 'workspace'),
+      discordNotifyChannelId: 'channel-2',
     },
     { source: 'test' },
   );
@@ -147,8 +151,12 @@ test('RunActions updates runtime settings and exposes them in dashboard', async 
   assert.equal(dashboard.settings.taskName, 'runtime task');
   assert.equal(dashboard.settings.maxIterations, 9);
   assert.equal(dashboard.settings.promptBody, 'inline prompt');
+  assert.equal(dashboard.settings.agentCwd, join(rootDir, 'workspace'));
+  assert.equal(dashboard.settings.discordNotifyChannelId, 'channel-2');
   assert.equal(config.maxIterations, 9);
   assert.equal(config.taskName, 'runtime task');
+  assert.equal(config.agentCwd, join(rootDir, 'workspace'));
+  assert.equal(config.discordNotifyChannelId, 'channel-2');
 
   rmSync(rootDir, { recursive: true, force: true });
 });
@@ -264,6 +272,31 @@ test('RunActions requestRunStart rejects invalid prompt settings', async () => {
 
   assert.equal(result.started, false);
   assert.match(result.message, /promptFile が見つかりません/);
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions requestRunStart rejects invalid execution directories', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+
+  const config = makeConfig(rootDir);
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  await actions.updateRuntimeSettings(
+    {
+      agentCwd: join(rootDir, 'missing-workspace'),
+    },
+    { source: 'test' },
+  );
+
+  const result = await actions.requestRunStart({ source: 'test' });
+
+  assert.equal(result.started, false);
+  assert.match(result.message, /実行ディレクトリが見つかりません/);
 
   rmSync(rootDir, { recursive: true, force: true });
 });

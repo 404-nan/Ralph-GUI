@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { RunMode, RuntimeSettings } from './shared/types.ts';
@@ -10,6 +10,7 @@ export interface AppConfig {
   stateDir: string;
   logDir: string;
   agentCommand: string;
+  agentCwd: string;
   mode: RunMode;
   maxIterations: number;
   idleSeconds: number;
@@ -46,6 +47,11 @@ export interface ConfigAssessment {
 }
 
 interface TaskCatalogInspection {
+  level: ConfigCheckItem['level'];
+  message: string;
+}
+
+interface DirectoryInspection {
   level: ConfigCheckItem['level'];
   message: string;
 }
@@ -179,6 +185,41 @@ function inspectTaskCatalogFile(taskCatalogFile: string): TaskCatalogInspection 
   }
 }
 
+function inspectDirectory(directoryPath: string, label: string): DirectoryInspection {
+  if (!directoryPath.trim()) {
+    return {
+      level: 'error',
+      message: `${label} が空です`,
+    };
+  }
+
+  if (!existsSync(directoryPath)) {
+    return {
+      level: 'error',
+      message: `${label} が見つかりません: ${directoryPath}`,
+    };
+  }
+
+  try {
+    if (!statSync(directoryPath).isDirectory()) {
+      return {
+        level: 'error',
+        message: `${label} はディレクトリではありません: ${directoryPath}`,
+      };
+    }
+  } catch (error) {
+    return {
+      level: 'error',
+      message: `${label} を確認できません: ${directoryPath} / ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  return {
+    level: 'ok',
+    message: `${label}: ${directoryPath}`,
+  };
+}
+
 export function listDiscordOperatorUserIds(config: AppConfig): string[] {
   const ids = [config.discordDmUserId, ...config.discordAllowedUserIds]
     .map((value) => value.trim())
@@ -194,6 +235,7 @@ export function loadConfig(rootDir: string = process.cwd()): AppConfig {
   const taskCatalogFile = taskCatalogEnv ? resolve(rootDir, taskCatalogEnv) : '';
   const stateDir = resolve(rootDir, process.env.RALPH_STATE_DIR ?? 'state');
   const logDir = resolve(rootDir, process.env.RALPH_LOG_DIR ?? 'logs');
+  const agentCwd = resolve(rootDir, process.env.RALPH_AGENT_CWD ?? '.');
   const mode = (process.env.RALPH_AGENT_MODE ?? 'command') as RunMode;
   const discordToken = process.env.RALPH_DISCORD_TOKEN ?? '';
   const discordAllowedUserIds = (process.env.RALPH_DISCORD_ALLOWED_USER_IDS ?? '')
@@ -210,6 +252,7 @@ export function loadConfig(rootDir: string = process.cwd()): AppConfig {
     agentCommand:
       process.env.RALPH_AGENT_COMMAND ??
       'codex exec --full-auto --skip-git-repo-check',
+    agentCwd,
     mode,
     maxIterations: envNumber('RALPH_MAX_ITERATIONS', 20),
     idleSeconds: envNumber('RALPH_IDLE_SECONDS', 5),
@@ -233,7 +276,10 @@ export function loadConfig(rootDir: string = process.cwd()): AppConfig {
 export function assessConfig(
   config: AppConfig,
   runtimeSettings?: Partial<
-    Pick<RuntimeSettings, 'taskName' | 'agentCommand' | 'promptFile' | 'promptBody' | 'mode'>
+    Pick<
+      RuntimeSettings,
+      'taskName' | 'agentCommand' | 'agentCwd' | 'promptFile' | 'promptBody' | 'mode' | 'discordNotifyChannelId'
+    >
   >,
 ): ConfigAssessment {
   const items: ConfigCheckItem[] = [];
@@ -242,6 +288,8 @@ export function assessConfig(
   const promptFile = runtimeSettings?.promptFile ?? config.promptFile;
   const promptBody = runtimeSettings?.promptBody ?? '';
   const agentCommand = runtimeSettings?.agentCommand ?? config.agentCommand;
+  const agentCwd = runtimeSettings?.agentCwd ?? config.agentCwd;
+  const discordNotifyChannelId = runtimeSettings?.discordNotifyChannelId ?? config.discordNotifyChannelId;
   const discordOperatorIds = listDiscordOperatorUserIds(config);
 
   if (taskName.trim()) {
@@ -271,6 +319,9 @@ export function assessConfig(
   } else {
     pushConfigCheck(items, 'agentCommand', 'error', '通常実行では RALPH_AGENT_COMMAND が必要です');
   }
+
+  const agentCwdInspection = inspectDirectory(agentCwd, '実行ディレクトリ');
+  pushConfigCheck(items, 'agentCwd', agentCwdInspection.level, agentCwdInspection.message);
 
   const taskCatalog = inspectTaskCatalogFile(config.taskCatalogFile);
   pushConfigCheck(items, 'taskCatalog', taskCatalog.level, taskCatalog.message);
@@ -332,7 +383,7 @@ export function assessConfig(
       pushConfigCheck(items, 'discordGuild', 'ok', `discord guild: ${config.discordGuildId}`);
     }
 
-    if (!config.discordNotifyChannelId.trim() && !config.discordDmUserId.trim()) {
+    if (!discordNotifyChannelId.trim() && !config.discordDmUserId.trim()) {
       pushConfigCheck(items, 'discordTarget', 'warning', '通知先の channel または DM user が未設定です');
     } else {
       pushConfigCheck(items, 'discordTarget', 'ok', 'Discord 通知先が設定されています');

@@ -22,6 +22,7 @@ function makeConfig(rootDir: string): AppConfig {
     stateDir: join(rootDir, 'state'),
     logDir: join(rootDir, 'logs'),
     agentCommand: 'codex exec --full-auto --skip-git-repo-check',
+    agentCwd: rootDir,
     mode: 'command',
     maxIterations: 5,
     idleSeconds: 1,

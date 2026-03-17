@@ -181,7 +181,18 @@ export class FileStateStore {
   }
 
   readSettings(): RuntimeSettings {
-    return this.readJson<RuntimeSettings>(this.settingsPath) ?? this.defaultSettings();
+    const stored = this.readJson<Partial<RuntimeSettings>>(this.settingsPath);
+    if (!stored) {
+      return this.defaultSettings();
+    }
+
+    return {
+      ...this.defaultSettings(),
+      ...stored,
+      agentCwd: stored.agentCwd ?? this.config.agentCwd,
+      promptBody: stored.promptBody ?? '',
+      discordNotifyChannelId: stored.discordNotifyChannelId ?? this.config.discordNotifyChannelId,
+    };
   }
 
   writeSettings(settings: RuntimeSettings): void {
@@ -299,8 +310,10 @@ export class FileStateStore {
     return {
       taskName: this.config.taskName,
       agentCommand: this.config.agentCommand,
+      agentCwd: this.config.agentCwd,
       promptFile: this.config.promptFile,
       promptBody: '',
+      discordNotifyChannelId: this.config.discordNotifyChannelId,
       maxIterations: this.config.maxIterations,
       idleSeconds: this.config.idleSeconds,
       mode: this.config.mode,

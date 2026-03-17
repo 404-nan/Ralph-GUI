@@ -73,6 +73,17 @@ interface SlashCommandDefinition {
   }>;
 }
 
+interface DiscordApiErrorPayload {
+  message?: string;
+  code?: number;
+}
+
+interface DiscordRequestResult {
+  ok: boolean;
+  errorText?: string;
+  error?: DiscordApiErrorPayload | null;
+}
+
 interface TaskDraftPayload {
   title?: string;
   summary?: string;
@@ -110,6 +121,22 @@ function describeCommandError(error: unknown): string {
 
 function modeLabel(mode: string): string {
   return mode === 'demo' ? 'デモ' : '通常';
+}
+
+function parseDiscordApiErrorPayload(raw: string): DiscordApiErrorPayload | null {
+  try {
+    const payload = JSON.parse(raw) as DiscordApiErrorPayload;
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function isDirectMessageBlocked(error: DiscordApiErrorPayload | null | undefined): boolean {
+  return error?.code === 50278 || error?.message === 'Cannot send messages to this user';
 }
 
 function lifecycleLabel(state: string): string {
@@ -337,6 +364,18 @@ function commandDefinitions(config: AppConfig): SlashCommandDefinition[] {
       ],
     },
     {
+      name: 'set-cwd',
+      description: '実行ディレクトリを更新します',
+      options: [
+        {
+          type: APPLICATION_COMMAND_OPTION_TYPE_STRING,
+          name: 'path',
+          description: 'agent を起動するディレクトリ',
+          required: true,
+        },
+      ],
+    },
+    {
       name: 'set-mode',
       description: '実行モードを更新します',
       options: [
@@ -430,6 +469,14 @@ export class DiscordBridge implements Notifier {
 
     this.intentionallyClosed = false;
     this.connectGateway();
+  }
+
+  async restart(): Promise<void> {
+    this.stop();
+    this.sequence = null;
+    this.dmChannelId = null;
+    this.reconnectAttempts = 0;
+    await this.start();
   }
 
   stop(): void {
@@ -705,6 +752,11 @@ export class DiscordBridge implements Notifier {
       return { restRaw: seconds, rest: seconds ? [seconds] : [] };
     }
 
+    if (command === 'set-cwd') {
+      const path = value('path');
+      return { restRaw: path, rest: path ? [path] : [] };
+    }
+
     if (command === 'set-mode') {
       const mode = value('mode');
       return { restRaw: mode, rest: mode ? [mode] : [] };
@@ -754,6 +806,7 @@ export class DiscordBridge implements Notifier {
         '/set-iterations 12',
         '/set-idle 3',
         '/set-mode command|demo',
+        '/set-cwd /abs/path/to/repo',
         '/set-prompt-file /abs/path/to/prompt.md',
         '/set-prompt ここに prompt 上書きを書く',
         '/clear-prompt',
@@ -780,6 +833,7 @@ export class DiscordBridge implements Notifier {
           `Task: ${settings.taskName}`,
           `実行: ${modeLabel(settings.mode)}`,
           `最大反復: ${settings.maxIterations}`,
+          `実行ディレクトリ: ${settings.agentCwd}`,
         ].join('\n'),
       );
       return;
@@ -794,8 +848,10 @@ export class DiscordBridge implements Notifier {
           `思考回数: ${settings.maxIterations}`,
           `待機秒数: ${settings.idleSeconds}`,
           `agentCommand: ${settings.agentCommand}`,
+          `agentCwd: ${settings.agentCwd}`,
           `promptFile: ${settings.promptFile || '(未設定)'}`,
           `prompt上書き: ${settings.promptBody.trim() ? 'あり' : 'なし'}`,
+          `notifyChannel: ${settings.discordNotifyChannelId || '(env / DM 優先)'}`,
         ].join('\n'),
       );
       return;
@@ -960,6 +1016,18 @@ export class DiscordBridge implements Notifier {
       return;
     }
 
+    if (command === 'set-cwd') {
+      const agentCwd = restRaw;
+      if (!agentCwd) {
+        await reply('使い方: /set-cwd /abs/path/to/repo');
+        return;
+      }
+
+      await this.actions.updateRuntimeSettings({ agentCwd }, { source: 'discord' });
+      await reply('実行ディレクトリを更新しました');
+      return;
+    }
+
     if (command === 'set-mode') {
       const mode = rest[0] === 'demo' ? 'demo' : rest[0] === 'command' ? 'command' : null;
       if (!mode) {
@@ -1039,7 +1107,14 @@ export class DiscordBridge implements Notifier {
     });
 
     if (!response.ok) {
-      console.error('discord: slash command 登録に失敗しました', await response.text());
+      const errorText = await response.text();
+      console.error('discord: slash command 登録に失敗しました', errorText);
+      const error = parseDiscordApiErrorPayload(errorText);
+      if (error?.code === 50001 && this.config.discordGuildId) {
+        console.error(
+          `discord: guild ${this.config.discordGuildId} へアクセスできません。Bot がその server に参加しているか、guild ID が正しいか確認してください`,
+        );
+      }
       return;
     }
 
@@ -1051,15 +1126,44 @@ export class DiscordBridge implements Notifier {
       return;
     }
 
-    const channelId = await this.resolveNotificationChannelId();
+    const dmChannelId = await this.resolveDmChannelId();
+    if (dmChannelId) {
+      const dmResult = await this.sendMessage(dmChannelId, content);
+      if (dmResult.ok) {
+        return;
+      }
+
+      if (this.config.discordNotifyChannelId && isDirectMessageBlocked(dmResult.error)) {
+        console.warn(
+          `discord: DM を送れないため notify channel ${this.config.discordNotifyChannelId} へフォールバックします`,
+        );
+        const fallbackResult = await this.sendMessage(this.config.discordNotifyChannelId, content);
+        if (!fallbackResult.ok) {
+          console.error('discord: notify channel へのフォールバック送信にも失敗しました', fallbackResult.errorText);
+        }
+        return;
+      }
+
+      console.error('discord: メッセージ送信に失敗しました', dmResult.errorText);
+      return;
+    }
+
+    const channelId = this.config.discordNotifyChannelId || null;
     if (!channelId) {
       return;
     }
 
-    await this.sendMessage(channelId, content);
+    const result = await this.sendMessage(channelId, content);
+    if (!result.ok) {
+      console.error('discord: メッセージ送信に失敗しました', result.errorText);
+    }
   }
 
-  private async resolveNotificationChannelId(): Promise<string | null> {
+  async resolveNotificationChannelId(): Promise<string | null> {
+    return (await this.resolveDmChannelId()) || this.config.discordNotifyChannelId || null;
+  }
+
+  private async resolveDmChannelId(): Promise<string | null> {
     if (this.config.discordDmUserId) {
       if (this.dmChannelId) {
         return this.dmChannelId;
@@ -1080,7 +1184,7 @@ export class DiscordBridge implements Notifier {
       console.error('discord: DM channel の作成に失敗しました', await response.text());
     }
 
-    return this.config.discordNotifyChannelId || null;
+    return null;
   }
 
   private normalizeContent(content: string): string {
@@ -1091,7 +1195,7 @@ export class DiscordBridge implements Notifier {
     return `${content.slice(0, DISCORD_MESSAGE_LIMIT - 1)}…`;
   }
 
-  private async sendMessage(channelId: string, content: string): Promise<void> {
+  private async sendMessage(channelId: string, content: string): Promise<DiscordRequestResult> {
     const response = await fetch(`${DISCORD_API_BASE}/channels/${channelId}/messages`, {
       method: 'POST',
       headers: this.headers(),
@@ -1099,8 +1203,15 @@ export class DiscordBridge implements Notifier {
     });
 
     if (!response.ok) {
-      console.error('discord: メッセージ送信に失敗しました', await response.text());
+      const errorText = await response.text();
+      return {
+        ok: false,
+        errorText,
+        error: parseDiscordApiErrorPayload(errorText),
+      };
     }
+
+    return { ok: true };
   }
 
   private async respondToInteraction(interactionId: string, token: string, content: string): Promise<void> {

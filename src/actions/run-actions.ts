@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { buildOrchestrationSnapshot } from '../orchestration/model.ts';
-import type { AppConfig } from '../config.ts';
+import { assessConfig, type AppConfig } from '../config.ts';
 import { parseStructuredMarkers } from '../parser/markers.ts';
 import { composePromptWithInjections } from '../prompt/composer.ts';
 import { createEventId, createRunId, nextSequentialId } from '../shared/id.ts';
@@ -22,6 +23,12 @@ import type {
 import { FileStateStore } from '../state/store.ts';
 import type { TaskImportPreview } from '../tasks/importer.ts';
 import {
+  buildArtifacts,
+  buildDashboardLayers,
+  buildPendingDecisions,
+  detectModelLabel,
+} from './dashboard-view.ts';
+import {
   TaskManager,
   parseTaskMarker,
   type ActionActor,
@@ -33,8 +40,10 @@ export type { ActionActor, TaskDraftInput } from './task-manager.ts';
 export interface RuntimeSettingsInput {
   taskName?: string;
   agentCommand?: string;
+  agentCwd?: string;
   promptFile?: string;
   promptBody?: string;
+  discordNotifyChannelId?: string;
   maxIterations?: number;
   idleSeconds?: number;
   mode?: RunMode;
@@ -98,9 +107,12 @@ export class RunActions {
 
     const status = this.refreshStatusCounters();
     const settings = this.getRuntimeSettings();
+    const canEditAgentCommand = this.canOverrideAgentCommand({ source: 'web' });
+    const model = detectModelLabel(settings.agentCommand, settings.mode);
     const questions = this.store.readQuestions();
     const answers = this.store.readAnswers();
     const pendingQuestions = questions.filter((question) => question.status === 'pending');
+    const pendingDecisions = buildPendingDecisions(pendingQuestions);
     const answeredQuestions = questions
       .filter((question) => question.status === 'answered')
       .map((question) => ({
@@ -118,23 +130,45 @@ export class RunActions {
     });
     const currentTask = this.tasks.findCurrentTask(orchestration.taskBoard);
     const nextTask = this.tasks.findNextTask(orchestration.taskBoard);
+    const recentEvents = (await this.store.listRecentEvents(40)).reverse();
+    const artifacts = buildArtifacts(recentEvents).slice(0, 8);
+    const diagnostics = assessConfig(this.config, settings).items.map((item) => ({
+      key: item.key,
+      level: item.level,
+      message: item.message,
+    }));
 
     return {
       status,
       settings,
       capabilities: {
-        canEditAgentCommand: this.canOverrideAgentCommand({ source: 'web' }),
+        canEditAgentCommand,
       },
       currentTask,
       nextTask,
       pendingQuestions,
+      pendingDecisions,
       answeredQuestions,
       blockers,
       promptInjectionQueue,
-      recentEvents: (await this.store.listRecentEvents(40)).reverse(),
+      recentEvents,
+      artifacts,
       agentLogTail: (await this.store.readAgentOutputTail(80)).filter(Boolean),
       taskBoard: orchestration.taskBoard,
       thinkingFrames: orchestration.thinkingFrames,
+      layers: buildDashboardLayers({
+        config: this.config,
+        settings,
+        status,
+        currentTask,
+        nextTask,
+        pendingDecisions,
+        blockers,
+        promptInjectionQueue,
+        diagnostics,
+        model,
+        canEditAgentCommand,
+      }),
     };
   }
 
@@ -156,7 +190,9 @@ export class RunActions {
     const currentAgentCommand = current.agentCommand.trim();
     const nextTaskName = input.taskName?.trim();
     const nextAgentCommand = input.agentCommand?.trim();
+    const nextAgentCwd = input.agentCwd?.trim();
     const nextPromptFile = input.promptFile?.trim();
+    const nextDiscordNotifyChannelId = input.discordNotifyChannelId?.trim() ?? '';
     const wantsAgentCommandChange =
       nextAgentCommand !== undefined && nextAgentCommand !== currentAgentCommand;
 
@@ -168,8 +204,16 @@ export class RunActions {
       ...current,
       taskName: nextTaskName ? nextTaskName : current.taskName,
       agentCommand: nextAgentCommand ? nextAgentCommand : current.agentCommand,
+      agentCwd:
+        nextAgentCwd !== undefined
+          ? resolve(this.config.rootDir, nextAgentCwd || '.')
+          : current.agentCwd,
       promptFile: nextPromptFile ? nextPromptFile : current.promptFile,
       promptBody: input.promptBody ?? current.promptBody,
+      discordNotifyChannelId:
+        input.discordNotifyChannelId !== undefined
+          ? nextDiscordNotifyChannelId
+          : current.discordNotifyChannelId,
       maxIterations:
         input.maxIterations && input.maxIterations > 0 ? input.maxIterations : current.maxIterations,
       idleSeconds:
@@ -195,6 +239,8 @@ export class RunActions {
       source: actor.source,
       maxIterations: next.maxIterations,
       mode: next.mode,
+      agentCwd: next.agentCwd,
+      discordNotifyChannelId: next.discordNotifyChannelId,
     });
 
     this.refreshStatusCounters();
@@ -845,7 +891,9 @@ export class RunActions {
   private applyRuntimeSettings(settings: RuntimeSettings): void {
     this.config.taskName = settings.taskName;
     this.config.agentCommand = settings.agentCommand;
+    this.config.agentCwd = settings.agentCwd;
     this.config.promptFile = settings.promptFile;
+    this.config.discordNotifyChannelId = settings.discordNotifyChannelId;
     this.config.maxIterations = settings.maxIterations;
     this.config.idleSeconds = settings.idleSeconds;
     this.config.mode = settings.mode;
@@ -862,6 +910,22 @@ export class RunActions {
 
     if (settings.mode === 'command' && !settings.agentCommand.trim()) {
       return '通常実行では agentCommand が必要です';
+    }
+
+    if (!settings.agentCwd.trim()) {
+      return 'run を開始する前に実行ディレクトリを設定してください';
+    }
+
+    if (!existsSync(settings.agentCwd)) {
+      return `実行ディレクトリが見つかりません: ${settings.agentCwd}`;
+    }
+
+    try {
+      if (!statSync(settings.agentCwd).isDirectory()) {
+        return `実行ディレクトリではありません: ${settings.agentCwd}`;
+      }
+    } catch (error) {
+      return `実行ディレクトリを確認できません: ${settings.agentCwd} / ${error instanceof Error ? error.message : String(error)}`;
     }
 
     if (!settings.promptBody.trim() && !settings.promptFile.trim()) {

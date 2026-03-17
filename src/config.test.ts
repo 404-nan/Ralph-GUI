@@ -18,6 +18,7 @@ function createBaseConfig(): AppConfig {
     stateDir: join(rootDir, 'state'),
     logDir: join(rootDir, 'logs'),
     agentCommand: 'codex exec --full-auto --skip-git-repo-check',
+    agentCwd: rootDir,
     mode: 'command',
     maxIterations: 20,
     idleSeconds: 5,
@@ -83,6 +84,19 @@ test('assessConfig fails when prompt or command settings are invalid', () => {
   );
 });
 
+test('assessConfig fails when the execution directory is invalid', () => {
+  const config = createBaseConfig();
+  config.agentCwd = join(config.rootDir, 'missing-workspace');
+
+  const assessment = assessConfig(config);
+
+  assert.equal(assessment.ok, false);
+  assert.equal(
+    assessment.items.find((item) => item.key === 'agentCwd')?.level,
+    'error',
+  );
+});
+
 test('assessConfig warns when runtime agent command override is enabled without protections', () => {
   const config = createBaseConfig();
   config.allowRuntimeAgentCommandOverride = true;
@@ -140,5 +154,20 @@ test('assessConfig honors persisted prompt overrides when runtime settings are s
   assert.match(
     assessment.items.find((item) => item.key === 'promptFile')?.message || '',
     /prompt 上書き/,
+  );
+});
+
+test('assessConfig honors persisted Discord notify channel overrides when runtime settings are supplied', () => {
+  const config = createBaseConfig();
+  config.discordToken = 'token';
+  config.discordEnabled = true;
+
+  const assessment = assessConfig(config, {
+    discordNotifyChannelId: 'channel-2',
+  });
+
+  assert.equal(
+    assessment.items.find((item) => item.key === 'discordTarget')?.level,
+    'ok',
   );
 });

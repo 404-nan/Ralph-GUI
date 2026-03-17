@@ -15,6 +15,7 @@ function makeConfig(rootDir: string): AppConfig {
     stateDir: join(rootDir, 'state'),
     logDir: join(rootDir, 'logs'),
     agentCommand: 'node -e "setInterval(() => {}, 1000)"',
+    agentCwd: rootDir,
     mode: 'command',
     maxIterations: 5,
     idleSeconds: 1,
@@ -50,6 +51,26 @@ test('AgentRunner abortCurrent terminates an in-flight command run', async () =>
 
   assert.equal(result.exitCode, null);
   assert.ok(result.signal === 'SIGTERM' || result.signal === 'SIGKILL');
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('AgentRunner starts the agent command in the configured execution directory', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-runner-'));
+  const workspaceDir = join(rootDir, 'workspace');
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  mkdirSync(workspaceDir, { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', 'utf8');
+
+  const config = makeConfig(rootDir);
+  config.agentCommand = 'node -e "process.stdout.write(process.cwd())"';
+  config.agentCwd = workspaceDir;
+
+  const runner = new AgentRunner(config);
+  const result = await runner.run('prompt', 1);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.output, workspaceDir);
 
   rmSync(rootDir, { recursive: true, force: true });
 });
