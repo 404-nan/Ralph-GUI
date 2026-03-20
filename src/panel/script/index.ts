@@ -9,24 +9,8 @@ function bindGlobalActions() {
   $('resumeBtn').addEventListener('click', () => { void doResume(); });
   $('abortBtn').addEventListener('click', () => doAbort());
   $('sendNoteBtn').addEventListener('click', () => { void sendNote(); });
-  $('composerTaskShortcut').addEventListener('click', () => {
-    openSecondaryTab('tasks');
-    openTaskCreate();
-    scrollToPanel('secondaryPanelTasks');
-  });
-  $('composerDecisionShortcut').addEventListener('click', () => {
-    openSecondaryTab('inbox');
-    scrollToPanel('secondaryPanelInbox');
-  });
-  $('composerSettingsShortcut').addEventListener('click', () => {
-    openSecondaryTab('settings');
-    scrollToPanel('secondaryPanelSettings');
-  });
   $('openTaskFormBtn').addEventListener('click', () => openTaskCreate());
-  $('toggleTaskImportBtn').addEventListener('click', () => {
-    state.taskImportVisible = !state.taskImportVisible;
-    renderTaskBoard(state.dashboardData);
-  });
+  $('toggleTaskImportBtn').addEventListener('click', () => toggleTaskImportPanel());
   $('noteInput').addEventListener('input', autosizeComposer);
   $('noteInput').addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -36,12 +20,23 @@ function bindGlobalActions() {
   });
 
   document.body.addEventListener('click', (event) => {
-    const target = event.target instanceof HTMLElement ? event.target.closest('button,[data-jump-tab]') : null;
+    const target = event.target instanceof HTMLElement ? event.target.closest('button') : null;
     if (!(target instanceof HTMLElement)) return;
 
-    const secondaryTab = target.dataset.secondaryTab;
-    if (secondaryTab) {
-      openSecondaryTab(secondaryTab);
+    if (target.dataset.secondaryTab) {
+      openSecondaryTab(target.dataset.secondaryTab);
+      if (target.dataset.navTarget) return;
+      const panelId = 'secondaryPanel' + target.dataset.secondaryTab.charAt(0).toUpperCase() + target.dataset.secondaryTab.slice(1);
+      scrollToPanel(panelId);
+      return;
+    }
+    if (target.dataset.navTarget) {
+      setActiveNav(target.dataset.navTarget);
+      scrollToPanel(target.dataset.navTarget);
+      return;
+    }
+    if (target.dataset.notePreset) {
+      void sendNote(target.dataset.notePreset);
       return;
     }
     if (target.dataset.answerQuestion) {
@@ -61,15 +56,6 @@ function bindGlobalActions() {
       void sendNote(target.dataset.prefillNote);
       return;
     }
-    if (target.dataset.jumpDecision) {
-      openSecondaryTab('tasks');
-      scrollToPanel('decisionCard_' + target.dataset.jumpDecision);
-      return;
-    }
-    if (target.dataset.jumpTab) {
-      openSecondaryTab(target.dataset.jumpTab);
-      return;
-    }
     if (target.dataset.completeTask) {
       void completeTask(target.dataset.completeTask);
       return;
@@ -84,10 +70,20 @@ function bindGlobalActions() {
     }
     if (target.dataset.editTask) {
       openTaskEdit(target.dataset.editTask);
+      openSecondaryTab('tasks');
+      scrollToPanel('secondaryPanelTasks');
       return;
     }
     if (target.dataset.openTaskCreate) {
       openTaskCreate();
+      openSecondaryTab('tasks');
+      scrollToPanel('secondaryPanelTasks');
+      return;
+    }
+    if (target.dataset.toggleTaskImport) {
+      toggleTaskImportPanel();
+      openSecondaryTab('tasks');
+      scrollToPanel('secondaryPanelTasks');
       return;
     }
     if (target.dataset.closeTaskForm) {
@@ -106,17 +102,6 @@ function bindGlobalActions() {
       void importTasksFromSpec();
       return;
     }
-    if (target.dataset.clearTaskImport) {
-      resetTaskImportPreview();
-      const input = $('taskImportInput');
-      if (input instanceof HTMLTextAreaElement) input.value = '';
-      renderTaskBoard(state.dashboardData);
-      return;
-    }
-    if (target.dataset.settingsMode) {
-      setSettingsMode(target.dataset.settingsMode);
-      return;
-    }
     if (target.dataset.reconnectDiscord) {
       void doDiscordReconnect();
       return;
@@ -127,9 +112,11 @@ function bindGlobalActions() {
     }
     if (target.dataset.cancelAbort) {
       state.abortConfirmOpen = false;
-      renderPrimary(state.dashboardData);
+      renderActionRail(state.dashboardData);
     }
   });
+
+  window.addEventListener('scroll', updateActiveNavFromScroll, { passive: true });
 }
 
 async function refresh() {
@@ -142,6 +129,7 @@ async function refresh() {
       || false;
     renderHeader(state.dashboardData);
     renderPrimary(state.dashboardData);
+    renderActionRail(state.dashboardData);
     renderTaskBoard(state.dashboardData);
     renderInboxHistory(state.dashboardData);
     renderSettings(state.dashboardData);
@@ -154,6 +142,7 @@ async function refresh() {
 
 bindGlobalActions();
 openSecondaryTab('tasks');
+setActiveNav('missionPanel');
 autosizeComposer();
 void refresh();
 window.setInterval(() => { void refresh(); }, 4000);

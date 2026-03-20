@@ -9,8 +9,8 @@ const state = {
   taskFormVisible: false,
   taskImportVisible: false,
   secondaryTab: 'tasks',
-  settingsMode: 'quick',
   abortConfirmOpen: false,
+  activeNavTarget: 'missionPanel',
 };
 
 function $(id) {
@@ -41,11 +41,6 @@ function el(tag, options = {}, children = []) {
     node.append(child);
   });
   return node;
-}
-
-function clearNode(node) {
-  if (!node) return;
-  node.replaceChildren();
 }
 
 function renderInto(target, children) {
@@ -101,40 +96,28 @@ function levelTone(level) {
 function humanizeEvent(event) {
   const message = String(event?.message || '');
   const summary = message.includes(':') ? message.slice(message.indexOf(':') + 1).trim() : message;
-
   const preset = {
-    'task.completed': ['やることが完了しました', summary || '完了しました', 'success'],
-    'task.created': ['やることを追加しました', summary || '追加しました', 'info'],
-    'task.imported': ['やることをまとめて追加しました', message || '追加しました', 'success'],
-    'task.reordered': ['task の順番を変更しました', summary || '順番を調整しました', 'info'],
-    'task.updated': ['やることを更新しました', summary || '更新しました', 'info'],
-    'run.started': ['run を開始しました', message || '開始しました', 'info'],
-    'run.completed': ['run が完了しました', message || '完了しました', 'success'],
-    'run.pause': ['run を停止しました', 'いつでも再開できます', 'warning'],
-    'run.resume': ['run を再開しました', '続きから進めます', 'info'],
-    'run.error': ['run が止まりました', message || '確認が必要です', 'warning'],
-    'note.enqueued': ['手動メモをキューに追加しました', '次のターンで反映されます', 'info'],
-    'settings.updated': ['設定を更新しました', '次の作業から反映されます', event?.level === 'warning' ? 'warning' : 'info'],
+    'task.completed': ['やることが完了しました', summary || '完了しました'],
+    'task.created': ['やることを追加しました', summary || '追加しました'],
+    'task.imported': ['やることをまとめて追加しました', message || '追加しました'],
+    'task.reordered': ['task の順番を変更しました', summary || '順番を調整しました'],
+    'task.updated': ['やることを更新しました', summary || '更新しました'],
+    'run.started': ['run を開始しました', message || '開始しました'],
+    'run.completed': ['run が完了しました', message || '完了しました'],
+    'run.pause': ['run を停止しました', 'いつでも再開できます'],
+    'run.resume': ['run を再開しました', '続きから進めます'],
+    'run.error': ['run が止まりました', message || '確認が必要です'],
+    'note.enqueued': ['manual note を投入しました', '次ターンで反映されます'],
+    'settings.updated': ['設定を更新しました', '次の run から反映されます'],
   }[String(event?.type || '')];
 
   if (!preset) {
     if (['agent.thinking', 'agent.status', 'agent.output', 'run.requested', 'question.created', 'blocker.created'].includes(String(event?.type || ''))) {
       return null;
     }
-    return {
-      title: '詳細ログ',
-      summary: summary || message || String(event?.type || 'イベント'),
-      tone: event?.level === 'error' ? 'warning' : event?.level === 'warning' ? 'warning' : 'info',
-      meta: fTime(event?.timestamp),
-    };
+    return { title: '詳細ログ', summary: summary || message || String(event?.type || 'event'), meta: fTime(event?.timestamp) };
   }
-
-  return {
-    title: preset[0],
-    summary: preset[1],
-    tone: preset[2],
-    meta: fTime(event?.timestamp),
-  };
+  return { title: preset[0], summary: preset[1], meta: fTime(event?.timestamp) };
 }
 
 const TOAST_LIMIT = 5;
@@ -152,7 +135,7 @@ function autosizeComposer() {
   const input = $('noteInput');
   if (!(input instanceof HTMLTextAreaElement)) return;
   input.style.height = '0px';
-  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  input.style.height = Math.min(input.scrollHeight, 130) + 'px';
 }
 
 function openSecondaryTab(tab) {
@@ -171,21 +154,43 @@ function scrollToPanel(id) {
   target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function setSettingsMode(mode) {
-  state.settingsMode = mode;
-  renderSettings(state.dashboardData);
-}
-
 function setTaskFormVisible(value) {
   state.taskFormVisible = value;
-  if (!value) {
-    state.editingTaskId = '';
-  }
+  if (!value) state.editingTaskId = '';
   renderTaskBoard(state.dashboardData);
 }
 
 function setTaskImportVisible(value) {
   state.taskImportVisible = value;
   renderTaskBoard(state.dashboardData);
+}
+
+function toggleTaskImportPanel() {
+  state.taskImportVisible = !state.taskImportVisible;
+  openSecondaryTab('tasks');
+  renderTaskBoard(state.dashboardData);
+}
+
+function setActiveNav(targetId) {
+  state.activeNavTarget = targetId;
+  document.querySelectorAll('[data-nav-target]').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.navTarget === targetId);
+  });
+}
+
+function updateActiveNavFromScroll() {
+  const candidates = ['missionPanel', 'decisionsPanel', 'updatesPanel'];
+  let active = state.activeNavTarget;
+  let best = Number.POSITIVE_INFINITY;
+  candidates.forEach((id) => {
+    const node = $(id);
+    if (!node) return;
+    const distance = Math.abs(node.getBoundingClientRect().top - 120);
+    if (distance < best) {
+      best = distance;
+      active = id;
+    }
+  });
+  setActiveNav(active);
 }
 `;

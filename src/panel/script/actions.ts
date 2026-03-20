@@ -119,6 +119,7 @@ async function moveTask(taskId, position) {
 function openTaskCreate() {
   state.editingTaskId = '';
   state.taskFormVisible = true;
+  state.taskImportVisible = false;
   openSecondaryTab('tasks');
   renderTaskBoard(state.dashboardData);
 }
@@ -126,6 +127,7 @@ function openTaskCreate() {
 function openTaskEdit(taskId) {
   state.editingTaskId = taskId;
   state.taskFormVisible = true;
+  state.taskImportVisible = false;
   openSecondaryTab('tasks');
   renderTaskBoard(state.dashboardData);
 }
