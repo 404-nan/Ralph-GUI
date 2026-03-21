@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -73,4 +73,28 @@ test('AgentRunner starts the agent command in the configured execution directory
   assert.equal(result.output, workspaceDir);
 
   rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('AgentRunner writes the prompt file into config.stateDir', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-runner-'));
+  const stateDir = mkdtempSync(join(tmpdir(), 'ralph-runner-state-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', 'utf8');
+
+  const config = makeConfig(rootDir);
+  config.stateDir = stateDir;
+  config.agentCommand = 'node -e "process.stdout.write(process.env.RALPH_PROMPT_FILE || \'\')"';
+
+  const runner = new AgentRunner(config);
+  const result = await runner.run('prompt body', 1);
+  const promptFilePath = join(stateDir, '.current-prompt.md');
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.output, promptFilePath);
+  assert.equal(existsSync(promptFilePath), true);
+  assert.equal(readFileSync(promptFilePath, 'utf8'), 'prompt body');
+  assert.equal(existsSync(join(rootDir, 'state', '.current-prompt.md')), false);
+
+  rmSync(rootDir, { recursive: true, force: true });
+  rmSync(stateDir, { recursive: true, force: true });
 });

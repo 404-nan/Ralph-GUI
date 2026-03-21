@@ -1,7 +1,8 @@
-import type { 
-  DashboardData, 
+import type {
+  AgentProfile,
+  DashboardData,
   RuntimeSettings,
-  TaskRecord
+  TaskRecord,
 } from '../../../src/shared/types.ts';
 
 const API_BASE = '/api';
@@ -27,34 +28,38 @@ export const apiClient = {
   pauseRun: () => fetchJson('/pause', { method: 'POST' }),
   resumeRun: () => fetchJson('/resume', { method: 'POST' }),
   abortRun: () => fetchJson('/abort', { method: 'POST' }),
-  
-  updateSettings: (settings: Partial<RuntimeSettings>) => 
+  resetState: () => fetchJson('/reset', { method: 'POST' }),
+
+  updateSettings: (settings: Partial<RuntimeSettings>) =>
     fetchJson('/settings', { method: 'POST', body: JSON.stringify(settings) }),
-  
-  submitAnswer: (questionId: string, answer: string) => 
+
+  submitAnswer: (questionId: string, answer: string) =>
     fetchJson('/answer', { method: 'POST', body: JSON.stringify({ questionId, answer }) }),
-  
-  enqueueNote: (note: string) => 
+
+  enqueueNote: (note: string) =>
     fetchJson('/note', { method: 'POST', body: JSON.stringify({ note }) }),
-    
-  previewTaskImport: (specText: string) => 
+
+  previewTaskImport: (specText: string) =>
     fetchJson('/task/import/preview', { method: 'POST', body: JSON.stringify({ specText }) }),
-    
-  importTasksFromSpec: (specText: string) => 
+
+  importTasksFromSpec: (specText: string) =>
     fetchJson('/task/import', { method: 'POST', body: JSON.stringify({ specText }) }),
-    
-  createTask: (title: string, summary?: string) => 
-    fetchJson<TaskRecord>('/task/create', { method: 'POST', body: JSON.stringify({ title, summary }) }),
-    
-  updateTask: (taskId: string, updates: { title?: string, summary?: string }) => 
+
+  createTask: (title: string, summary?: string, agentId?: string) =>
+    fetchJson<TaskRecord>('/task/create', { method: 'POST', body: JSON.stringify({ title, summary, agentId }) }),
+
+  updateTask: (taskId: string, updates: { title?: string; summary?: string; agentId?: string }) =>
     fetchJson<TaskRecord>('/task/update', { method: 'POST', body: JSON.stringify({ taskId, ...updates }) }),
-    
-  completeTask: (taskId: string) => 
+
+  completeTask: (taskId: string) =>
     fetchJson<TaskRecord>('/task/complete', { method: 'POST', body: JSON.stringify({ taskId }) }),
-    
-  reopenTask: (taskId: string) => 
+
+  reopenTask: (taskId: string) =>
     fetchJson<TaskRecord>('/task/reopen', { method: 'POST', body: JSON.stringify({ taskId }) }),
-    
-  moveTask: (taskId: string, position: 'front' | 'back') => 
+
+  moveTask: (taskId: string, position: 'front' | 'back') =>
     fetchJson<TaskRecord>('/task/move', { method: 'POST', body: JSON.stringify({ taskId, position }) }),
+
+  updateAgentProfiles: (profiles: AgentProfile[]) =>
+    fetchJson('/settings', { method: 'POST', body: JSON.stringify({ agentProfiles: profiles }) }),
 };

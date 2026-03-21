@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -157,6 +157,111 @@ test('RunActions updates runtime settings and exposes them in dashboard', async 
   assert.equal(config.taskName, 'runtime task');
   assert.equal(config.agentCwd, join(rootDir, 'workspace'));
   assert.equal(config.discordNotifyChannelId, 'channel-2');
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions preserves agent assignments on seeded tasks across catalog synchronization', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+  writeFileSync(
+    join(rootDir, 'prd.json'),
+    JSON.stringify(
+      {
+        userStories: [
+          { id: 'US-001', title: 'first', priority: 1, passes: false },
+          { id: 'US-002', title: 'second', priority: 2, passes: false },
+        ],
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+
+  const config = makeConfig(rootDir);
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  await actions.updateRuntimeSettings(
+    {
+      agentProfiles: [
+        { id: 'agent-1', label: 'Agent One', command: 'demo-agent' },
+      ],
+    },
+    { source: 'test' },
+  );
+  await actions.getDashboardData();
+  await actions.updateTask('US-001', { agentId: 'agent-1' }, { source: 'test' });
+
+  assert.equal(actions.getCurrentTask()?.id, 'US-001');
+  assert.equal(actions.getCurrentTask()?.agentId, 'agent-1');
+  assert.equal(
+    (await actions.getDashboardData()).taskBoard.find((task) => task.id === 'US-001')?.agentId,
+    'agent-1',
+  );
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions resetRuntimeData clears operational state and restores startup defaults', async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  mkdirSync(join(rootDir, 'prompts'), { recursive: true });
+  mkdirSync(join(rootDir, 'workspace'), { recursive: true });
+  writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
+
+  const config = makeConfig(rootDir);
+  config.taskCatalogFile = '';
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+  const actions = new RunActions(store, config);
+
+  await actions.updateRuntimeSettings(
+    {
+      taskName: 'custom task',
+      maxIterations: 9,
+      idleSeconds: 2,
+      promptBody: 'custom prompt',
+      agentCwd: join(rootDir, 'workspace'),
+      discordNotifyChannelId: 'channel-9',
+    },
+    { source: 'test' },
+  );
+  await actions.recordQuestion('pending question');
+  await actions.submitAnswer('Q-001', 'answer', { source: 'test' });
+  await actions.enqueueManualNote('manual note', { source: 'test' });
+  await actions.createTask({ title: 'dirty task', summary: 'dirty task' }, { source: 'test' });
+  writeFileSync(join(config.stateDir, 'answer-inbox.jsonl'), '{"value":1}\n', 'utf8');
+  writeFileSync(join(config.stateDir, 'note-inbox.txt'), 'dirty note\n', 'utf8');
+  writeFileSync(join(config.stateDir, '.current-prompt.md'), 'dirty prompt\n', 'utf8');
+  writeFileSync(join(config.stateDir, 'events.jsonl'), '{"type":"dirty"}\n', 'utf8');
+  writeFileSync(join(config.logDir, 'agent-output.log'), 'dirty log\n', 'utf8');
+
+  const status = actions.resetRuntimeData();
+
+  assert.equal(status.lifecycle, 'idle');
+  assert.equal(status.phase, 'idle');
+  assert.equal(status.task, 'test');
+  assert.equal(status.maxIterations, 5);
+  assert.equal(status.promptFile, 'prompts/supervisor.md');
+  assert.deepEqual(store.readQuestions(), []);
+  assert.deepEqual(store.readAnswers(), []);
+  assert.deepEqual(store.readManualNotes(), []);
+  assert.deepEqual(store.readTasks(), []);
+  assert.equal(store.readSettings().taskName, 'test');
+  assert.equal(store.readSettings().promptBody, '');
+  assert.equal(store.readSettings().agentCwd, rootDir);
+  assert.equal(store.readSettings().discordNotifyChannelId, '');
+  assert.equal(config.taskName, 'test');
+  assert.equal(config.maxIterations, 5);
+  assert.equal(config.agentCwd, rootDir);
+  assert.equal(readFileSync(join(config.stateDir, 'answer-inbox.jsonl'), 'utf8'), '');
+  assert.equal(readFileSync(join(config.stateDir, 'note-inbox.txt'), 'utf8'), '');
+  assert.equal(readFileSync(join(config.stateDir, '.current-prompt.md'), 'utf8'), '');
+  assert.equal(readFileSync(join(config.stateDir, 'events.jsonl'), 'utf8'), '');
+  assert.equal(readFileSync(join(config.logDir, 'agent-output.log'), 'utf8'), '');
 
   rmSync(rootDir, { recursive: true, force: true });
 });

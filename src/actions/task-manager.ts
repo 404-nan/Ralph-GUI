@@ -18,6 +18,7 @@ export interface TaskDraftInput {
   title?: string;
   summary?: string;
   acceptanceCriteria?: string[];
+  agentId?: string;
 }
 
 interface ParsedTaskMarker {
@@ -149,6 +150,7 @@ export class TaskManager {
         notes: nextNotes,
         titleOverride: existing?.titleOverride,
         summaryOverride: existing?.summaryOverride,
+        agentId: existing?.agentId,
         completedAt: nextStatus === 'completed' ? existing?.completedAt ?? timestamp : undefined,
       };
     });
@@ -185,6 +187,7 @@ export class TaskManager {
       updatedAt: timestamp,
       source: actor.source,
       acceptanceCriteria: (input.acceptanceCriteria ?? []).map((item) => item.trim()).filter(Boolean),
+      agentId: input.agentId,
     };
   }
 
@@ -265,6 +268,9 @@ export class TaskManager {
       const summary = nextSummary || task.title;
       task.summary = summary;
       task.summaryOverride = seed ? (summary === seed.summary ? undefined : summary) : undefined;
+    }
+    if (input.agentId !== undefined) {
+      task.agentId = input.agentId || undefined;
     }
     task.updatedAt = nowIso();
     task.source = actor.source;

@@ -9,6 +9,7 @@ import { createEventId, createRunId, nextSequentialId } from '../shared/id.ts';
 import { toPortableDisplayPath } from '../shared/path.ts';
 import { nowIso } from '../shared/time.ts';
 import type {
+  AgentProfile,
   AnswerRecord,
   DashboardData,
   EventRecord,
@@ -46,6 +47,7 @@ export interface RuntimeSettingsInput {
   maxIterations?: number;
   idleSeconds?: number;
   mode?: RunMode;
+  agentProfiles?: AgentProfile[];
 }
 
 function renderOrchestrationSummary(
@@ -149,11 +151,24 @@ export class RunActions {
       agentLogTail: (await this.store.readAgentOutputTail(80)).filter(Boolean),
       taskBoard: orchestration.taskBoard,
       thinkingFrames: orchestration.thinkingFrames,
+      agentProfiles: settings.agentProfiles,
     };
   }
 
   getStatus(): RunStatus {
     return this.refreshStatusCounters();
+  }
+
+  getCurrentTask(): TaskBoardItem | undefined {
+    const status = this.getStatus();
+    const orchestration = buildOrchestrationSnapshot({
+      status,
+      tasks: this.tasks.synchronizeTaskCatalog(),
+      pendingQuestions: this.listPendingQuestions(),
+      blockers: this.store.readBlockers(),
+      promptInjectionQueue: this.listPromptInjectionQueue(),
+    });
+    return this.findCurrentTask(orchestration.taskBoard);
   }
 
   getRuntimeSettings(): RuntimeSettings {
@@ -201,6 +216,7 @@ export class RunActions {
       mode: input.mode ?? current.mode,
       updatedAt: nowIso(),
       updatedBy: actor.source,
+      agentProfiles: input.agentProfiles ?? current.agentProfiles,
     };
 
     this.store.writeSettings(next);
@@ -227,6 +243,12 @@ export class RunActions {
 
     this.refreshStatusCounters();
     return next;
+  }
+
+  resetRuntimeData(): RunStatus {
+    this.store.resetRuntimeData();
+    this.applyRuntimeSettings(this.store.readSettings());
+    return this.store.readStatus();
   }
 
   async createTask(input: TaskDraftInput, actor: ActionActor): Promise<TaskRecord> {

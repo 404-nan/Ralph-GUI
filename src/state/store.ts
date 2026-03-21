@@ -27,6 +27,21 @@ interface InboxOffsets {
   notesLineOffset: number;
 }
 
+type InitialConfigSnapshot = Readonly<
+  Pick<
+    AppConfig,
+    | 'rootDir'
+    | 'promptFile'
+    | 'agentCommand'
+    | 'agentCwd'
+    | 'mode'
+    | 'maxIterations'
+    | 'idleSeconds'
+    | 'taskName'
+    | 'discordNotifyChannelId'
+  >
+>;
+
 function splitInboxLines(content: string): string[] {
   if (!content) {
     return [];
@@ -39,7 +54,7 @@ function splitInboxLines(content: string): string[] {
   return lines;
 }
 
-function defaultStatus(config: AppConfig): RunStatus {
+function buildDefaultStatus(config: InitialConfigSnapshot): RunStatus {
   return {
     runId: '',
     task: config.taskName,
@@ -69,7 +84,7 @@ function defaultStatus(config: AppConfig): RunStatus {
 export class FileStateStore {
   private readonly stateDir: string;
   private readonly logDir: string;
-  private readonly config: AppConfig;
+  private readonly initialConfig: InitialConfigSnapshot;
 
   private readonly statusPath: string;
   private readonly questionsPath: string;
@@ -83,11 +98,22 @@ export class FileStateStore {
   private readonly answerInboxPath: string;
   private readonly noteInboxPath: string;
   private readonly inboxOffsetsPath: string;
+  private readonly currentPromptPath: string;
 
   constructor(config: AppConfig) {
-    this.config = config;
     this.stateDir = config.stateDir;
     this.logDir = config.logDir;
+    this.initialConfig = {
+      rootDir: config.rootDir,
+      promptFile: config.promptFile,
+      agentCommand: config.agentCommand,
+      agentCwd: config.agentCwd,
+      mode: config.mode,
+      maxIterations: config.maxIterations,
+      idleSeconds: config.idleSeconds,
+      taskName: config.taskName,
+      discordNotifyChannelId: config.discordNotifyChannelId,
+    };
 
     this.statusPath = join(this.stateDir, 'status.json');
     this.questionsPath = join(this.stateDir, 'questions.json');
@@ -101,13 +127,14 @@ export class FileStateStore {
     this.answerInboxPath = join(this.stateDir, 'answer-inbox.jsonl');
     this.noteInboxPath = join(this.stateDir, 'note-inbox.txt');
     this.inboxOffsetsPath = join(this.stateDir, 'inbox-offsets.json');
+    this.currentPromptPath = join(this.stateDir, '.current-prompt.md');
   }
 
   async ensureInitialized(): Promise<void> {
     mkdirSync(this.stateDir, { recursive: true });
     mkdirSync(this.logDir, { recursive: true });
 
-    this.writeJsonIfMissing(this.statusPath, defaultStatus(this.config));
+    this.writeJsonIfMissing(this.statusPath, this.defaultStatus());
     this.writeJsonIfMissing(this.questionsPath, []);
     this.writeJsonIfMissing(this.answersPath, []);
     this.writeJsonIfMissing(this.manualNotesPath, []);
@@ -134,7 +161,7 @@ export class FileStateStore {
   }
 
   readStatus(): RunStatus {
-    return this.readJson<RunStatus>(this.statusPath) ?? defaultStatus(this.config);
+    return this.readJson<RunStatus>(this.statusPath) ?? this.defaultStatus();
   }
 
   writeStatus(status: RunStatus): void {
@@ -190,9 +217,10 @@ export class FileStateStore {
     return {
       ...this.defaultSettings(),
       ...stored,
-      agentCwd: stored.agentCwd ?? this.config.agentCwd,
+      agentCwd: stored.agentCwd ?? this.initialConfig.agentCwd,
       promptBody: stored.promptBody ?? '',
-      discordNotifyChannelId: stored.discordNotifyChannelId ?? this.config.discordNotifyChannelId,
+      discordNotifyChannelId: stored.discordNotifyChannelId ?? this.initialConfig.discordNotifyChannelId,
+      agentProfiles: stored.agentProfiles ?? [],
     };
   }
 
@@ -238,10 +266,11 @@ export class FileStateStore {
     this.writeBlockers([]);
     writeFileSync(this.eventsPath, '', 'utf8');
     writeFileSync(this.agentOutputPath, '', 'utf8');
+    writeFileSync(this.currentPromptPath, '', 'utf8');
   }
 
   resetRuntimeData(): void {
-    this.writeStatus(defaultStatus(this.config));
+    this.writeStatus(this.defaultStatus());
     this.writeQuestions([]);
     this.writeAnswers([]);
     this.writeManualNotes([]);
@@ -253,6 +282,7 @@ export class FileStateStore {
     writeFileSync(this.agentOutputPath, '', 'utf8');
     writeFileSync(this.answerInboxPath, '', 'utf8');
     writeFileSync(this.noteInboxPath, '', 'utf8');
+    writeFileSync(this.currentPromptPath, '', 'utf8');
   }
 
   readInboxOffsets(): InboxOffsets {
@@ -324,17 +354,22 @@ export class FileStateStore {
 
   private defaultSettings(): RuntimeSettings {
     return {
-      taskName: this.config.taskName,
-      agentCommand: this.config.agentCommand,
-      agentCwd: this.config.agentCwd,
-      promptFile: this.config.promptFile,
+      taskName: this.initialConfig.taskName,
+      agentCommand: this.initialConfig.agentCommand,
+      agentCwd: this.initialConfig.agentCwd,
+      promptFile: this.initialConfig.promptFile,
       promptBody: '',
-      discordNotifyChannelId: this.config.discordNotifyChannelId,
-      maxIterations: this.config.maxIterations,
-      idleSeconds: this.config.idleSeconds,
-      mode: this.config.mode,
+      discordNotifyChannelId: this.initialConfig.discordNotifyChannelId,
+      maxIterations: this.initialConfig.maxIterations,
+      idleSeconds: this.initialConfig.idleSeconds,
+      mode: this.initialConfig.mode,
       updatedAt: nowIso(),
       updatedBy: 'system',
+      agentProfiles: [],
     };
+  }
+
+  private defaultStatus(): RunStatus {
+    return buildDefaultStatus(this.initialConfig);
   }
 }

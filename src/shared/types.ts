@@ -16,6 +16,13 @@ export type TaskPriority = 'critical' | 'high' | 'medium' | 'low';
 export type StoredTaskStatus = 'pending' | 'blocked' | 'completed';
 export type DisplayTaskStatus = 'active' | 'queued' | 'blocked' | 'completed';
 
+export interface AgentProfile {
+  id: string;
+  label: string;
+  command: string;
+  description?: string;
+}
+
 export interface RunStatus {
   runId: string;
   task: string;
@@ -99,6 +106,7 @@ export interface TaskRecord {
   notes?: string;
   titleOverride?: string;
   summaryOverride?: string;
+  agentId?: string;
 }
 
 export interface EventRecord {
@@ -185,6 +193,7 @@ export interface RuntimeSettings {
   mode: RunMode;
   updatedAt: string;
   updatedBy: string;
+  agentProfiles: AgentProfile[];
 }
 
 export interface DashboardData {
@@ -205,6 +214,7 @@ export interface DashboardData {
   agentLogTail: string[];
   taskBoard: TaskBoardItem[];
   thinkingFrames: string[];
+  agentProfiles: AgentProfile[];
 }
 
 export interface MarkerMatch {

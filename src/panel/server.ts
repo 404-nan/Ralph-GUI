@@ -9,6 +9,7 @@ import { resolveStaticFile, renderPanelHtml } from './html.ts';
 export interface PanelServerHooks {
   onAbort?: () => void;
   onDiscordReconnect?: () => Promise<void> | void;
+  waitForIdle?: () => Promise<void> | void;
 }
 
 const JSON_BODY_LIMIT = 1024 * 1024;
@@ -252,6 +253,7 @@ export function startPanelServer(
                     : body.mode === 'command'
                       ? 'command'
                       : undefined,
+                agentProfiles: Array.isArray(body.agentProfiles) ? body.agentProfiles : undefined,
               },
               { source: 'web' },
             ),
@@ -307,6 +309,37 @@ export function startPanelServer(
         }
         hooks.onAbort?.();
         writeJson(response, 200, data);
+        notifyClients();
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/reset') {
+        try {
+          const status = actions.getStatus();
+          const mustCoordinateReset =
+            status.control === 'abort_requested'
+            || status.phase === 'queued'
+            || ['starting', 'running', 'pause_requested', 'paused'].includes(status.lifecycle);
+
+          if (mustCoordinateReset) {
+            if (!hooks.waitForIdle) {
+              throw new HttpError(409, 'run 実行中の state reset は現在の起動モードでは扱えません');
+            }
+
+            if (status.control !== 'abort_requested') {
+              await actions.abortRun({ source: 'web' });
+            }
+            hooks.onAbort?.();
+            await hooks.waitForIdle();
+          }
+
+          writeJson(response, 200, { status: actions.resetRuntimeData() });
+        } catch (error) {
+          if (error instanceof HttpError) {
+            throw error;
+          }
+          throw new HttpError(409, error instanceof Error ? error.message : 'state を初期化できませんでした');
+        }
         notifyClients();
         return;
       }
@@ -376,6 +409,7 @@ export function startPanelServer(
               {
                 title: typeof body.title === 'string' ? body.title : undefined,
                 summary: typeof body.summary === 'string' ? body.summary : undefined,
+                agentId: typeof body.agentId === 'string' ? body.agentId : undefined,
               },
               { source: 'web' },
             ),
@@ -398,6 +432,7 @@ export function startPanelServer(
           {
             title: typeof body.title === 'string' ? body.title : undefined,
             summary: typeof body.summary === 'string' ? body.summary : undefined,
+            agentId: typeof body.agentId === 'string' ? body.agentId : undefined,
           },
           { source: 'web' },
         );

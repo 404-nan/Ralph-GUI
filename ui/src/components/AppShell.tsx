@@ -37,6 +37,7 @@ export function AppShell() {
         isOpen={isSidebarOpen}
         onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
         tasks={dashboard.taskBoard}
+        agentProfiles={dashboard.agentProfiles}
         activeTaskId={effectiveTaskId}
         onSelectTask={setActiveTaskId}
       />

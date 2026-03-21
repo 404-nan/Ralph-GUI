@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { AppConfig } from '../config.ts';
 import { runMockAgent } from '../demo/mock-agent.ts';
@@ -20,7 +22,7 @@ export class AgentRunner {
     this.config = config;
   }
 
-  async run(prompt: string, iteration: number): Promise<AgentRunResult> {
+  async run(prompt: string, iteration: number, agentCommand?: string): Promise<AgentRunResult> {
     if (this.config.mode === 'demo') {
       const output = await runMockAgent(prompt, iteration);
       return {
@@ -30,8 +32,15 @@ export class AgentRunner {
       };
     }
 
+    const command = agentCommand || this.config.agentCommand;
+    const promptFilePath = join(this.config.stateDir, '.current-prompt.md');
+    mkdirSync(this.config.stateDir, { recursive: true });
+    writeFileSync(promptFilePath, prompt, 'utf8');
+
+    const expandedCommand = command.replace(/\{PROMPT_FILE\}/g, promptFilePath);
+
     return new Promise((resolve, reject) => {
-      const child = spawn(this.config.agentCommand, {
+      const child = spawn(expandedCommand, {
         cwd: this.config.agentCwd,
         detached: process.platform !== 'win32',
         shell: true,
@@ -39,6 +48,7 @@ export class AgentRunner {
         env: {
           ...process.env,
           RALPH_ITERATION: String(iteration),
+          RALPH_PROMPT_FILE: promptFilePath,
         },
       });
 

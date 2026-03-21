@@ -66,7 +66,8 @@ export class Supervisor {
 
         await this.actions.updateIteration(iteration);
         const prompt = await this.actions.preparePromptForNextTurn();
-        const result = await this.runner.run(prompt, iteration);
+        const agentCommand = this.resolveAgentCommandForCurrentTask();
+        const result = await this.runner.run(prompt, iteration, agentCommand);
         await this.actions.appendAgentOutput(result.output, iteration);
 
         const markerResult = await this.processOutput(result.output);
@@ -100,9 +101,31 @@ export class Supervisor {
     }
   }
 
+  private resolveAgentCommandForCurrentTask(): string | undefined {
+    const settings = this.actions.getRuntimeSettings();
+    const profiles = settings.agentProfiles;
+    if (!profiles || profiles.length === 0) return undefined;
+
+    const currentTask = this.actions.getCurrentTask();
+    if (!currentTask?.agentId) return undefined;
+
+    const profile = profiles.find((p) => p.id === currentTask.agentId);
+    return profile?.command;
+  }
+
   abortCurrentTurn(reason: string): void {
     this.runner.abortCurrent();
     void this.notifier.notifyRunAborted(reason);
+  }
+
+  async waitUntilIdle(timeoutMs: number = 15000): Promise<void> {
+    const startedAt = Date.now();
+    while (this.isRunning) {
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error(`supervisor が ${timeoutMs}ms 以内に停止しませんでした`);
+      }
+      await sleep(100);
+    }
   }
 
   private async processOutput(output: string): Promise<{ done: boolean }> {

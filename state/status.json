@@ -16,9 +16,9 @@
   "completedTaskCount": 0,
   "queuedTaskCount": 0,
   "maxIntegration": 1,
-  "updatedAt": "2026-03-17T13:43:19.158Z",
-  "agentCommand": "codex --yolo",
+  "updatedAt": "2026-03-21T19:58:27.880Z",
+  "agentCommand": "codex exec --full-auto --skip-git-repo-check",
   "mode": "command",
   "promptFile": "prompts/supervisor.md",
-  "thinkingText": "Ralph が Task の流れを組み直しています。"
+  "thinkingText": ""
 }

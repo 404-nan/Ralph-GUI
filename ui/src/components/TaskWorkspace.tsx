@@ -85,7 +85,7 @@ export function TaskWorkspace({ dashboard, activeTask, onAction }: TaskWorkspace
           showImport ? (
             <SpecImport embedded onClose={() => setShowImport(false)} onImportSuccess={() => { setShowImport(false); onAction(); }} />
           ) : (
-            <TaskBoard tasks={dashboard.taskBoard} onAction={onAction} onImport={() => setShowImport(true)} />
+            <TaskBoard tasks={dashboard.taskBoard} agentProfiles={dashboard.agentProfiles} onAction={onAction} onImport={() => setShowImport(true)} />
           )
         )}
         {tab === 'inbox' && (

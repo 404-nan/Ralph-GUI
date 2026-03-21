@@ -33,6 +33,9 @@ export async function bootstrapSystem(options: BootstrapOptions) {
       }
       await discordBridge.restart();
     },
+    waitForIdle: async () => {
+      await supervisor?.waitUntilIdle();
+    },
   };
   let discordBridge: DiscordBridge | null = null;
   if (options.startDiscord && config.discordEnabled) {
