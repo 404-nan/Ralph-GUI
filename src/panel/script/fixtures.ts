@@ -5,6 +5,10 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function fixtureIso(offsetMinutes = 0) {
+  return new Date(Date.now() + offsetMinutes * 60_000).toISOString();
+}
+
 function baseFixtureData() {
   const now = new Date('2026-03-21T10:15:00.000Z');
   const iso = (minutes) => new Date(now.getTime() + minutes * 60_000).toISOString();
@@ -243,6 +247,56 @@ function buildScenarioMeta(kind, dashboard) {
   return base;
 }
 
+function syncFixtureDashboard(dashboard) {
+  const activeTasks = dashboard.taskBoard.filter((task) => task.displayStatus === 'active');
+  const queuedTasks = dashboard.taskBoard.filter((task) => task.displayStatus === 'queued');
+  const blockedTasks = dashboard.taskBoard.filter((task) => task.displayStatus === 'blocked');
+  const completedTasks = dashboard.taskBoard.filter((task) => task.displayStatus === 'completed');
+
+  dashboard.currentTask = activeTasks[0] || blockedTasks[0];
+  dashboard.nextTask = queuedTasks[0];
+  dashboard.status.totalTaskCount = dashboard.taskBoard.length;
+  dashboard.status.activeTaskCount = activeTasks.length;
+  dashboard.status.completedTaskCount = completedTasks.length;
+  dashboard.status.queuedTaskCount = queuedTasks.length;
+  dashboard.status.pendingQuestionCount = dashboard.pendingQuestions.length;
+  dashboard.status.blockerCount = dashboard.blockers.length;
+  dashboard.status.pendingInjectionCount = dashboard.promptInjectionQueue.length;
+  dashboard.status.answeredQuestionCount = dashboard.answeredQuestions.length;
+  dashboard.status.updatedAt = fixtureIso();
+  dashboard.layers.control.run.activeTaskCount = activeTasks.length;
+  dashboard.layers.control.run.queuedTaskCount = queuedTasks.length;
+  dashboard.layers.control.run.completedTaskCount = completedTasks.length;
+  dashboard.layers.control.run.pendingDecisionCount = dashboard.pendingDecisions.length + dashboard.blockers.length;
+  dashboard.layers.control.run.updatedAt = dashboard.status.updatedAt;
+  dashboard.layers.control.run.currentTaskLabel = dashboard.currentTask?.title || 'これから決まります';
+  dashboard.layers.control.run.nextTaskLabel = dashboard.nextTask?.title || '未定';
+  dashboard.workspace = buildScenarioMeta(state.fixtureMode, dashboard);
+  dashboard.__fixtureMode = state.fixtureMode;
+  return dashboard;
+}
+
+function appendFixtureEvent(dashboard, type, message, level = 'info') {
+  dashboard.recentEvents.unshift({
+    id: 'E-' + Math.random().toString(36).slice(2, 8),
+    timestamp: fixtureIso(),
+    type,
+    message,
+    level,
+  });
+  dashboard.recentEvents = dashboard.recentEvents.slice(0, 12);
+}
+
+function fixtureTaskPreview(specText) {
+  const tasks = specText
+    .split(/\n+/)
+    .map((line) => line.trim().replace(/^[-*]\s*/, ''))
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((line, index) => ({ title: line, summary: 'fixture preview task ' + String(index + 1) }));
+  return { tasks };
+}
+
 function fixtureDashboard(mode) {
   const dashboard = baseFixtureData();
   if (mode === 'active-workspace') {
@@ -263,7 +317,175 @@ function fixtureDashboard(mode) {
     dashboard.layers.control.run.currentTaskLabel = dashboard.currentTask.title;
   }
   dashboard.workspace = buildScenarioMeta(mode, dashboard);
+  dashboard.__fixtureMode = mode;
   return dashboard;
+}
+
+function ensureFixtureDashboard() {
+  if (!state.dashboardData || !isFixtureMode()) {
+    state.dashboardData = getFixtureDashboard(state.fixtureMode);
+  }
+  return clone(state.dashboardData);
+}
+
+function fixtureApi(path, body = {}) {
+  const dashboard = ensureFixtureDashboard();
+  const taskById = (taskId) => dashboard.taskBoard.find((item) => item.id === taskId);
+
+  if (path === '/api/note') {
+    const note = String(body.note || '').trim();
+    if (!note) return null;
+    dashboard.promptInjectionQueue.unshift({ id: 'N-' + Math.random().toString(36).slice(2, 8), kind: 'note', label: 'manual note', text: note, createdAt: fixtureIso() });
+    appendFixtureEvent(dashboard, 'note.enqueued', 'fixture note: ' + note);
+  }
+
+  if (path === '/api/answer') {
+    const questionId = String(body.questionId || '');
+    const answer = String(body.answer || '').trim();
+    if (!questionId || !answer) return null;
+    const question = dashboard.pendingQuestions.find((item) => item.id === questionId);
+    dashboard.pendingQuestions = dashboard.pendingQuestions.filter((item) => item.id !== questionId);
+    dashboard.pendingDecisions = dashboard.pendingDecisions.filter((item) => item.id !== questionId);
+    if (question) {
+      dashboard.answeredQuestions.unshift({
+        ...question,
+        status: 'answered',
+        answer: { id: 'A-' + Math.random().toString(36).slice(2, 8), questionId, answer, createdAt: fixtureIso(), source: 'fixture-ui' },
+      });
+    }
+    if (state.fixtureMode === 'blocked-waiting') {
+      dashboard.blockers = [];
+      const blockedTask = dashboard.taskBoard.find((task) => task.id === 'TG-004');
+      if (blockedTask) {
+        blockedTask.displayStatus = 'active';
+        blockedTask.status = 'pending';
+        blockedTask.updatedAt = fixtureIso();
+      }
+      dashboard.status.lifecycle = 'running';
+      dashboard.status.control = 'running';
+      dashboard.status.currentStatusText = 'decision を受け取り blocked task を再開しました';
+    }
+    appendFixtureEvent(dashboard, 'question.answered', 'fixture decision answered: ' + answer);
+  }
+
+  if (path === '/api/task/create') {
+    const title = String(body.title || '').trim();
+    if (!title) return null;
+    const summary = String(body.summary || '').trim();
+    dashboard.taskBoard.push({
+      id: 'TG-' + String(dashboard.taskBoard.length + 1).padStart(3, '0'),
+      title,
+      summary: summary || title,
+      priority: 'medium',
+      sortIndex: dashboard.taskBoard.length,
+      status: 'pending',
+      displayStatus: 'queued',
+      createdAt: fixtureIso(),
+      updatedAt: fixtureIso(),
+      source: 'fixture-ui',
+      acceptanceCriteria: [],
+      notes: '',
+    });
+    appendFixtureEvent(dashboard, 'task.created', 'fixture task created: ' + title);
+  }
+
+  if (path === '/api/task/update') {
+    const task = taskById(String(body.taskId || ''));
+    if (!task) return null;
+    task.title = String(body.title || task.title).trim() || task.title;
+    task.summary = String(body.summary || task.summary).trim() || task.summary;
+    task.updatedAt = fixtureIso();
+    appendFixtureEvent(dashboard, 'task.updated', 'fixture task updated: ' + task.title);
+  }
+
+  if (path === '/api/task/complete') {
+    const task = taskById(String(body.taskId || ''));
+    if (!task) return null;
+    task.displayStatus = 'completed';
+    task.status = 'completed';
+    task.updatedAt = fixtureIso();
+    appendFixtureEvent(dashboard, 'task.completed', 'fixture task completed: ' + task.title);
+  }
+
+  if (path === '/api/task/reopen') {
+    const task = taskById(String(body.taskId || ''));
+    if (!task) return null;
+    task.displayStatus = 'queued';
+    task.status = 'pending';
+    task.updatedAt = fixtureIso();
+    appendFixtureEvent(dashboard, 'task.reopened', 'fixture task reopened: ' + task.title);
+  }
+
+  if (path === '/api/task/move') {
+    const taskId = String(body.taskId || '');
+    const index = dashboard.taskBoard.findIndex((task) => task.id === taskId);
+    if (index >= 0) {
+      const [task] = dashboard.taskBoard.splice(index, 1);
+      dashboard.taskBoard.splice(body.position === 'front' ? 0 : dashboard.taskBoard.length, 0, task);
+      dashboard.taskBoard.forEach((item, order) => { item.sortIndex = order; });
+      appendFixtureEvent(dashboard, 'task.reordered', 'fixture task reordered: ' + task.title);
+    }
+  }
+
+  if (path === '/api/task/import/preview') {
+    return fixtureTaskPreview(String(body.specText || ''));
+  }
+
+  if (path === '/api/task/import') {
+    const preview = fixtureTaskPreview(String(body.specText || ''));
+    preview.tasks.forEach((task) => {
+      dashboard.taskBoard.push({
+        id: 'TG-' + String(dashboard.taskBoard.length + 1).padStart(3, '0'),
+        title: task.title,
+        summary: task.summary,
+        priority: 'medium',
+        sortIndex: dashboard.taskBoard.length,
+        status: 'pending',
+        displayStatus: 'queued',
+        createdAt: fixtureIso(),
+        updatedAt: fixtureIso(),
+        source: 'fixture-import',
+        acceptanceCriteria: [],
+        notes: '',
+      });
+    });
+    appendFixtureEvent(dashboard, 'task.imported', 'fixture imported ' + String(preview.tasks.length) + ' tasks');
+    syncFixtureDashboard(dashboard);
+    state.dashboardData = dashboard;
+    return { tasks: preview.tasks };
+  }
+
+  if (path === '/api/start') {
+    dashboard.status.lifecycle = 'running';
+    dashboard.status.control = 'running';
+    dashboard.status.currentStatusText = 'fixture run を開始しました';
+    appendFixtureEvent(dashboard, 'run.started', 'fixture run started');
+  }
+
+  if (path === '/api/pause') {
+    dashboard.status.lifecycle = 'paused';
+    dashboard.status.control = 'paused';
+    dashboard.status.currentStatusText = 'fixture run を一時停止しました';
+    appendFixtureEvent(dashboard, 'run.pause', 'fixture run paused', 'warning');
+  }
+
+  if (path === '/api/resume') {
+    dashboard.status.lifecycle = 'running';
+    dashboard.status.control = 'running';
+    dashboard.status.currentStatusText = 'fixture run を再開しました';
+    appendFixtureEvent(dashboard, 'run.resume', 'fixture run resumed');
+  }
+
+  if (path === '/api/abort') {
+    dashboard.status.lifecycle = 'aborted';
+    dashboard.status.control = 'aborted';
+    dashboard.status.currentStatusText = 'fixture run を中断しました';
+    appendFixtureEvent(dashboard, 'run.error', 'fixture run aborted', 'warning');
+  }
+
+  syncFixtureDashboard(dashboard);
+  state.dashboardData = dashboard;
+  return { ok: true, fixture: true };
 }
 
 function getFixtureDashboard(mode) {

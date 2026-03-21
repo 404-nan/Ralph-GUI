@@ -123,7 +123,9 @@ function bindGlobalActions() {
 async function refresh() {
   try {
     if (isFixtureMode()) {
-      state.dashboardData = getFixtureDashboard(state.fixtureMode);
+      if (!state.dashboardData || state.dashboardData.__fixtureMode !== state.fixtureMode) {
+        state.dashboardData = getFixtureDashboard(state.fixtureMode);
+      }
     } else {
       const response = await fetch('/api/dashboard');
       if (!response.ok) throw new Error(await response.text());

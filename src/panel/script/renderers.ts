@@ -189,7 +189,14 @@ function createTimelineEntry(item) {
 }
 
 function renderFixtureSwitcher() {
-  renderInto($('fixtureSwitcher'), FIXTURE_MODES.map((mode) => createActionButton(
+  const host = $('fixtureSwitcher');
+  if (!showFixtureSwitcher()) {
+    host.classList.add('is-hidden');
+    host.replaceChildren();
+    return;
+  }
+  host.classList.remove('is-hidden');
+  renderInto(host, FIXTURE_MODES.map((mode) => createActionButton(
     mode === 'live' ? 'live data' : mode,
     { fixtureMode: mode },
     'fixture-chip' + (state.fixtureMode === mode ? ' is-active' : ''),
@@ -229,7 +236,12 @@ function renderPrimary(dashboard) {
   const run = dashboard.layers?.control?.run || {};
   const mission = missionCopy(dashboard);
   const workspace = deriveWorkspace(dashboard);
-  state.selectedDecisionId = state.selectedDecisionId || firstPendingDecisionId(dashboard);
+  const firstDecisionId = firstPendingDecisionId(dashboard);
+  if (!firstDecisionId) {
+    state.selectedDecisionId = '';
+  } else if (!state.selectedDecisionId || !(dashboard.pendingDecisions || []).some((item) => item.id === state.selectedDecisionId)) {
+    state.selectedDecisionId = firstDecisionId;
+  }
 
   renderInto($('summaryMetrics'), [
     createMetric('進行中', run.activeTaskCount || 0),

@@ -14,9 +14,8 @@ export const panelLayoutStyles = String.raw`
   gap: 16px;
   align-items: center;
   padding: 14px 18px;
-  background: rgba(246, 247, 242, 0.84);
-  backdrop-filter: blur(18px);
-  border-bottom: 1px solid rgba(214, 220, 211, 0.84);
+  background: rgba(247, 248, 244, 0.72);
+  backdrop-filter: blur(20px);
 }
 .topbar__brand,
 .topbar__center,
@@ -44,8 +43,8 @@ export const panelLayoutStyles = String.raw`
   margin: 0 auto;
   padding: 16px 0 14px;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 340px;
-  gap: 16px;
+  grid-template-columns: 232px minmax(0, 1fr) 332px;
+  gap: 18px;
   align-items: start;
   flex: 1;
 }
@@ -53,20 +52,17 @@ export const panelLayoutStyles = String.raw`
 .right-drawer {
   position: sticky;
   top: 82px;
-}
-.left-rail,
-.right-drawer {
   display: grid;
   gap: 12px;
 }
 .app-shell.is-sidebar-collapsed .workspace-shell {
-  grid-template-columns: 72px minmax(0, 1fr) 340px;
+  grid-template-columns: 68px minmax(0, 1fr) 332px;
 }
 .app-shell.is-sidebar-collapsed .left-rail {
   overflow: hidden;
 }
 .app-shell.is-sidebar-collapsed .left-rail .rail-panel {
-  padding-inline: 10px;
+  padding-inline: 8px;
 }
 .app-shell.is-sidebar-collapsed .left-rail .rail-title,
 .app-shell.is-sidebar-collapsed .left-rail .rail-panel__head > div,
@@ -85,7 +81,7 @@ export const panelLayoutStyles = String.raw`
   margin-right: 0;
 }
 .app-shell.is-drawer-collapsed .workspace-shell {
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
 }
 .app-shell.is-drawer-collapsed .right-drawer {
   display: none;

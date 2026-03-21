@@ -1,8 +1,7 @@
 export const panelScriptActions = String.raw`
 async function api(path, body) {
   if (isFixtureMode()) {
-    toast('fixture mode では API 送信は行いません。導線確認用です。', 'warning');
-    return { ok: true, fixture: true };
+    return fixtureApi(path, body);
   }
 
   const response = await fetch(path, {

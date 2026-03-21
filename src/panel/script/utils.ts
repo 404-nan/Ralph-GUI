@@ -14,6 +14,7 @@ const state = {
   sidebarCollapsed: false,
   drawerCollapsed: false,
   fixtureMode: new URLSearchParams(window.location.search).get('fixture') || 'live',
+  fixtureSwitcherVisible: new URLSearchParams(window.location.search).get('fixtures') === '1' || new URLSearchParams(window.location.search).has('fixture'),
   composerMode: 'note',
   selectedDecisionId: '',
 };
@@ -212,9 +213,15 @@ function isFixtureMode() {
   return state.fixtureMode && state.fixtureMode !== 'live';
 }
 
+
+function showFixtureSwitcher() {
+  return state.fixtureSwitcherVisible || isFixtureMode();
+}
+
 function setFixtureMode(mode) {
   state.fixtureMode = mode;
   const url = new URL(window.location.href);
+  state.fixtureSwitcherVisible = mode !== 'live' || url.searchParams.get('fixtures') === '1';
   if (mode === 'live') {
     url.searchParams.delete('fixture');
   } else {
