@@ -20,5 +20,5 @@
   "agentCommand": "codex --yolo",
   "mode": "command",
   "promptFile": "prompts/supervisor.md",
-  "thinkingText": ""
+  "thinkingText": "Ralph が Task の流れを組み直しています。"
 }

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { buildOrchestrationSnapshot } from '../orchestration/model.ts';
-import { assessConfig, type AppConfig } from '../config.ts';
+import type { AppConfig } from '../config.ts';
 import { parseStructuredMarkers } from '../parser/markers.ts';
 import { composePromptWithInjections } from '../prompt/composer.ts';
 import { createEventId, createRunId, nextSequentialId } from '../shared/id.ts';
@@ -25,9 +25,7 @@ import { FileStateStore } from '../state/store.ts';
 import type { TaskImportPreview } from '../tasks/importer.ts';
 import {
   buildArtifacts,
-  buildDashboardLayers,
   buildPendingDecisions,
-  detectModelLabel,
 } from './dashboard-view.ts';
 import {
   TaskManager,
@@ -109,7 +107,6 @@ export class RunActions {
     const status = this.refreshStatusCounters();
     const settings = this.getRuntimeSettings();
     const canEditAgentCommand = this.canOverrideAgentCommand({ source: 'web' });
-    const model = detectModelLabel(settings.agentCommand, settings.mode);
     const questions = this.store.readQuestions();
     const answers = this.store.readAnswers();
     const pendingQuestions = questions.filter((question) => question.status === 'pending');
@@ -133,11 +130,6 @@ export class RunActions {
     const nextTask = this.tasks.findNextTask(orchestration.taskBoard);
     const recentEvents = (await this.store.listRecentEvents(40)).reverse();
     const artifacts = buildArtifacts(recentEvents).slice(0, 8);
-    const diagnostics = assessConfig(this.config, settings).items.map((item) => ({
-      key: item.key,
-      level: item.level,
-      message: item.message,
-    }));
 
     return {
       status,
@@ -157,19 +149,6 @@ export class RunActions {
       agentLogTail: (await this.store.readAgentOutputTail(80)).filter(Boolean),
       taskBoard: orchestration.taskBoard,
       thinkingFrames: orchestration.thinkingFrames,
-      layers: buildDashboardLayers({
-        config: this.config,
-        settings,
-        status,
-        currentTask,
-        nextTask,
-        pendingDecisions,
-        blockers,
-        promptInjectionQueue,
-        diagnostics,
-        model,
-        canEditAgentCommand,
-      }),
     };
   }
 

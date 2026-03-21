@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createHash } from 'node:crypto';
+import type { Duplex } from 'node:stream';
 
 import type { RunActions } from '../actions/run-actions.ts';
 import type { AppConfig } from '../config.ts';
-import { renderPanelHtml } from './html.ts';
+import { resolveStaticFile, renderPanelHtml } from './html.ts';
 
 export interface PanelServerHooks {
   onAbort?: () => void;
@@ -101,15 +103,110 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   }
 }
 
+// --- Minimal WebSocket implementation ---
+
+const WS_GUID = '258EAFA5-E914-47DA-95CA-5AB5DC11E5B5';
+const wsClients = new Set<Duplex>();
+
+function encodeWsFrame(data: string): Buffer {
+  const payload = Buffer.from(data, 'utf8');
+  const len = payload.length;
+  let header: Buffer;
+  if (len < 126) {
+    header = Buffer.alloc(2);
+    header[0] = 0x81; // FIN + text
+    header[1] = len;
+  } else if (len < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
+  return Buffer.concat([header, payload]);
+}
+
+function handleWsUpgrade(request: IncomingMessage, socket: Duplex) {
+  const key = request.headers['sec-websocket-key'];
+  if (!key) {
+    socket.destroy();
+    return;
+  }
+
+  const accept = createHash('sha1').update(key + WS_GUID).digest('base64');
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+    'Upgrade: websocket\r\n' +
+    'Connection: Upgrade\r\n' +
+    `Sec-WebSocket-Accept: ${accept}\r\n` +
+    '\r\n',
+  );
+
+  wsClients.add(socket);
+
+  socket.on('data', (raw: Buffer) => {
+    // Handle close frame or ping
+    if (raw.length >= 2) {
+      const opcode = raw[0] & 0x0f;
+      if (opcode === 0x08) {
+        // Close frame
+        wsClients.delete(socket);
+        socket.end();
+      } else if (opcode === 0x09) {
+        // Ping - send pong
+        const pong = Buffer.from(raw);
+        pong[0] = (pong[0] & 0xf0) | 0x0a;
+        socket.write(pong);
+      }
+    }
+  });
+
+  socket.on('close', () => wsClients.delete(socket));
+  socket.on('error', () => wsClients.delete(socket));
+
+  // Send initial refresh
+  socket.write(encodeWsFrame(JSON.stringify({ type: 'connected' })));
+}
+
+export function notifyClients(): void {
+  const frame = encodeWsFrame(JSON.stringify({ type: 'refresh' }));
+  for (const socket of wsClients) {
+    try {
+      socket.write(frame);
+    } catch {
+      wsClients.delete(socket);
+    }
+  }
+}
+
+// --- CORS ---
+
+function addCorsHeaders(response: ServerResponse): void {
+  response.setHeader('access-control-allow-origin', '*');
+  response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+  response.setHeader('access-control-allow-headers', 'content-type, authorization');
+}
+
 export function startPanelServer(
   config: AppConfig,
   actions: RunActions,
   hooks: PanelServerHooks = {},
 ) {
-  const html = renderPanelHtml();
-
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
     try {
+      addCorsHeaders(response);
+
+      // Handle CORS preflight
+      if (request.method === 'OPTIONS') {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+
       if (!isAuthorized(request, config)) {
         writeUnauthorized(response);
         return;
@@ -117,11 +214,7 @@ export function startPanelServer(
 
       const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
 
-      if (request.method === 'GET' && url.pathname === '/') {
-        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        response.end(html);
-        return;
-      }
+      // --- API Routes ---
 
       if (request.method === 'GET' && url.pathname === '/api/dashboard') {
         writeJson(response, 200, await actions.getDashboardData());
@@ -130,6 +223,7 @@ export function startPanelServer(
 
       if (request.method === 'POST' && url.pathname === '/api/start') {
         writeJson(response, 200, await actions.requestRunStart({ source: 'web' }));
+        notifyClients();
         return;
       }
 
@@ -165,6 +259,7 @@ export function startPanelServer(
         } catch (error) {
           throw new HttpError(400, error instanceof Error ? error.message : '設定を更新できませんでした');
         }
+        notifyClients();
         return;
       }
 
@@ -189,6 +284,7 @@ export function startPanelServer(
         } catch (error) {
           throw new HttpError(409, error instanceof Error ? error.message : 'pause できませんでした');
         }
+        notifyClients();
         return;
       }
 
@@ -198,6 +294,7 @@ export function startPanelServer(
         } catch (error) {
           throw new HttpError(409, error instanceof Error ? error.message : 'resume できませんでした');
         }
+        notifyClients();
         return;
       }
 
@@ -210,6 +307,7 @@ export function startPanelServer(
         }
         hooks.onAbort?.();
         writeJson(response, 200, data);
+        notifyClients();
         return;
       }
 
@@ -224,6 +322,7 @@ export function startPanelServer(
         } catch (error) {
           throw new HttpError(400, error instanceof Error ? error.message : '回答を保存できませんでした');
         }
+        notifyClients();
         return;
       }
 
@@ -235,6 +334,7 @@ export function startPanelServer(
 
         await actions.enqueueManualNote(body.note, { source: 'web' });
         writeJson(response, 200, { ok: true });
+        notifyClients();
         return;
       }
 
@@ -262,6 +362,7 @@ export function startPanelServer(
           }
           throw new HttpError(400, error instanceof Error ? error.message : 'Task を一括追加できませんでした');
         }
+        notifyClients();
         return;
       }
 
@@ -282,6 +383,7 @@ export function startPanelServer(
         } catch (error) {
           throw new HttpError(400, error instanceof Error ? error.message : 'Task を作成できませんでした');
         }
+        notifyClients();
         return;
       }
 
@@ -305,6 +407,7 @@ export function startPanelServer(
         }
 
         writeJson(response, 200, data);
+        notifyClients();
         return;
       }
 
@@ -320,6 +423,7 @@ export function startPanelServer(
         }
 
         writeJson(response, 200, data);
+        notifyClients();
         return;
       }
 
@@ -335,6 +439,7 @@ export function startPanelServer(
         }
 
         writeJson(response, 200, data);
+        notifyClients();
         return;
       }
 
@@ -353,12 +458,42 @@ export function startPanelServer(
         }
 
         writeJson(response, 200, data);
+        notifyClients();
         return;
+      }
+
+      // --- Static file serving ---
+
+      if (request.method === 'GET') {
+        const staticFile = resolveStaticFile(url.pathname);
+        if (staticFile) {
+          response.writeHead(200, { 'content-type': staticFile.contentType });
+          response.end(staticFile.content);
+          return;
+        }
+
+        // SPA fallback: serve index.html for non-API, non-asset GET requests
+        const indexFile = resolveStaticFile('/');
+        if (indexFile) {
+          response.writeHead(200, { 'content-type': indexFile.contentType });
+          response.end(indexFile.content);
+          return;
+        }
       }
 
       throw new HttpError(404, 'ページが見つかりません');
     } catch (error) {
       writeError(response, error);
+    }
+  });
+
+  // WebSocket upgrade handler
+  server.on('upgrade', (request: IncomingMessage, socket: Duplex) => {
+    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+    if (url.pathname === '/ws') {
+      handleWsUpgrade(request, socket);
+    } else {
+      socket.destroy();
     }
   });
 

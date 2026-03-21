@@ -158,48 +158,6 @@ export interface DashboardDiagnosticItem {
   message: string;
 }
 
-export interface DashboardSurfaceLayer {
-  projectName: string;
-  projectPath: string;
-  modelLabel: string;
-  modelDetail: string;
-}
-
-export interface DashboardRunView {
-  runId: string;
-  requestLabel: string;
-  lifecycleLabel: string;
-  modeLabel: string;
-  currentTaskLabel: string;
-  nextTaskLabel: string;
-  activeTaskCount: number;
-  queuedTaskCount: number;
-  completedTaskCount: number;
-  pendingDecisionCount: number;
-  updatedAt: string;
-}
-
-export interface DashboardControlLayer {
-  run: DashboardRunView;
-  previewQueue: PromptInjectionItem[];
-}
-
-export interface DashboardPowerLayer {
-  resources: ResourceView[];
-  diagnostics: DashboardDiagnosticItem[];
-  panelUrl: string;
-  panelAuthEnabled: boolean;
-  canEditAgentCommand: boolean;
-  agentCommand: string;
-  promptSource: string;
-}
-
-export interface DashboardLayers {
-  surface: DashboardSurfaceLayer;
-  control: DashboardControlLayer;
-  power: DashboardPowerLayer;
-}
-
 export interface TaskBoardItem extends TaskRecord {
   displayStatus: DisplayTaskStatus;
   laneId?: string;
@@ -247,7 +205,6 @@ export interface DashboardData {
   agentLogTail: string[];
   taskBoard: TaskBoardItem[];
   thinkingFrames: string[];
-  layers: DashboardLayers;
 }
 
 export interface MarkerMatch {

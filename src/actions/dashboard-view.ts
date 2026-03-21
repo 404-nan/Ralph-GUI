@@ -1,62 +1,14 @@
-import type { AppConfig } from '../config.ts';
 import type {
   ArtifactView,
-  BlockerRecord,
-  DashboardDiagnosticItem,
-  DashboardLayers,
   DecisionView,
   EventRecord,
-  PromptInjectionItem,
   QuestionRecord,
   RunMode,
-  RunStatus,
-  RuntimeSettings,
-  TaskBoardItem,
 } from '../shared/types.ts';
-
-function basename(value: string): string {
-  const normalized = value.replaceAll('\\', '/').split('/').filter(Boolean);
-  return normalized.at(-1) ?? value;
-}
-
-function lifecycleLabel(value: RunStatus['lifecycle']): string {
-  return {
-    idle: '待機中',
-    starting: '準備中',
-    running: '作業中',
-    paused: '一時停止',
-    pause_requested: '停止を待っています',
-    completed: '完了',
-    aborted: '中断',
-    failed: '要確認',
-  }[value] ?? '待機中';
-}
-
-function modeLabel(value: RunMode): string {
-  return value === 'demo' ? 'デモ' : '通常';
-}
-
-function findDiagnosticLevel(items: DashboardDiagnosticItem[], key: string): DashboardDiagnosticItem['level'] {
-  return items.find((item) => item.key === key)?.level ?? 'ok';
-}
 
 export interface ModelLabelInfo {
   label: string;
   detail: string;
-}
-
-export interface BuildDashboardLayersInput {
-  config: AppConfig;
-  settings: RuntimeSettings;
-  status: RunStatus;
-  currentTask?: TaskBoardItem;
-  nextTask?: TaskBoardItem;
-  pendingDecisions: DecisionView[];
-  blockers: BlockerRecord[];
-  promptInjectionQueue: PromptInjectionItem[];
-  diagnostics: DashboardDiagnosticItem[];
-  model: ModelLabelInfo;
-  canEditAgentCommand: boolean;
 }
 
 export function detectModelLabel(agentCommand: string, mode: RunMode): ModelLabelInfo {
@@ -170,98 +122,3 @@ export function buildArtifacts(events: EventRecord[]): ArtifactView[] {
   });
 }
 
-export function buildDashboardLayers(input: BuildDashboardLayersInput): DashboardLayers {
-  const {
-    config,
-    settings,
-    status,
-    currentTask,
-    nextTask,
-    pendingDecisions,
-    blockers,
-    promptInjectionQueue,
-    diagnostics,
-    model,
-    canEditAgentCommand,
-  } = input;
-
-  const panelUrl = `http://${config.panelHost}:${config.panelPort}`;
-  const promptSource = settings.promptBody.trim() ? '[画面からの追加指示]' : settings.promptFile || '(未設定)';
-
-  return {
-    surface: {
-      projectName: basename(settings.agentCwd),
-      projectPath: settings.agentCwd,
-      modelLabel: model.label,
-      modelDetail: model.detail,
-    },
-    control: {
-      run: {
-        runId: status.runId || '未開始',
-        requestLabel: status.task || 'まだ設定されていません',
-        lifecycleLabel: lifecycleLabel(status.lifecycle),
-        modeLabel: modeLabel(status.mode),
-        currentTaskLabel: currentTask?.title ?? 'これから決まります',
-        nextTaskLabel: nextTask?.title ?? '未定',
-        activeTaskCount: status.activeTaskCount,
-        queuedTaskCount: status.queuedTaskCount,
-        completedTaskCount: status.completedTaskCount,
-        pendingDecisionCount: pendingDecisions.length + blockers.length,
-        updatedAt: status.updatedAt,
-      },
-      previewQueue: promptInjectionQueue,
-    },
-    power: {
-      resources: [
-        {
-          id: 'model',
-          label: '利用モデル',
-          value: model.label,
-          detail: model.detail,
-          level: 'ok',
-        },
-        {
-          id: 'workspace',
-          label: '作業フォルダ',
-          value: settings.agentCwd,
-          detail: basename(settings.agentCwd),
-          level: findDiagnosticLevel(diagnostics, 'agentCwd'),
-        },
-        {
-          id: 'prompt',
-          label: '指示ソース',
-          value: promptSource,
-          detail: settings.promptBody.trim() ? '追加の指示を優先します' : basename(settings.promptFile || '(未設定)'),
-          level: findDiagnosticLevel(diagnostics, 'promptFile'),
-        },
-        {
-          id: 'taskCatalog',
-          label: '仕様ファイル',
-          value: config.taskCatalogFile || '(未設定)',
-          detail: config.taskCatalogFile ? basename(config.taskCatalogFile) : '画面からやることを追加できます',
-          level: findDiagnosticLevel(diagnostics, 'taskCatalog'),
-        },
-        {
-          id: 'notify',
-          label: '通知先',
-          value: settings.discordNotifyChannelId || (config.discordEnabled ? 'DM または未設定' : 'Discord 無効'),
-          detail: config.discordEnabled ? 'Discord と連携できます' : 'Web 画面のみで使えます',
-          level: findDiagnosticLevel(diagnostics, 'discordTarget'),
-        },
-        {
-          id: 'panel',
-          label: '画面URL',
-          value: panelUrl,
-          detail: config.panelUsername.trim() && config.panelPassword.trim() ? 'Basic 認証あり' : 'Basic 認証なし',
-          level: findDiagnosticLevel(diagnostics, 'panelAuth'),
-        },
-      ],
-      diagnostics,
-      panelUrl,
-      panelAuthEnabled: config.panelUsername.trim().length > 0 && config.panelPassword.trim().length > 0,
-      canEditAgentCommand,
-      agentCommand: settings.agentCommand,
-      promptSource,
-    },
-  };
-}
