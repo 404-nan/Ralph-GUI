@@ -1,4 +1,5 @@
 import { panelScriptActions } from './actions.ts';
+import { panelScriptFixtures } from './fixtures.ts';
 import { panelScriptRenderers } from './renderers.ts';
 import { panelScriptUtils } from './utils.ts';
 
@@ -8,14 +9,17 @@ function bindGlobalActions() {
   $('pauseBtn').addEventListener('click', () => { void doPause(); });
   $('resumeBtn').addEventListener('click', () => { void doResume(); });
   $('abortBtn').addEventListener('click', () => doAbort());
-  $('sendNoteBtn').addEventListener('click', () => { void sendNote(); });
+  $('sendNoteBtn').addEventListener('click', () => { void sendComposer(); });
   $('openTaskFormBtn').addEventListener('click', () => openTaskCreate());
   $('toggleTaskImportBtn').addEventListener('click', () => toggleTaskImportPanel());
+  $('sidebarToggleBtn').addEventListener('click', () => setSidebarCollapsed(!state.sidebarCollapsed));
+  $('sidebarCollapseBtn').addEventListener('click', () => setSidebarCollapsed(!state.sidebarCollapsed));
+  $('drawerToggleBtn').addEventListener('click', () => setDrawerCollapsed(!state.drawerCollapsed));
   $('noteInput').addEventListener('input', autosizeComposer);
   $('noteInput').addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
-      void sendNote();
+      void sendComposer();
     }
   });
 
@@ -23,20 +27,26 @@ function bindGlobalActions() {
     const target = event.target instanceof HTMLElement ? event.target.closest('button') : null;
     if (!(target instanceof HTMLElement)) return;
 
-    if (target.dataset.secondaryTab) {
-      openSecondaryTab(target.dataset.secondaryTab);
-      if (target.dataset.navTarget) return;
-      const panelId = 'secondaryPanel' + target.dataset.secondaryTab.charAt(0).toUpperCase() + target.dataset.secondaryTab.slice(1);
-      scrollToPanel(panelId);
+    if (target.dataset.fixtureMode) {
+      setFixtureMode(target.dataset.fixtureMode);
       return;
     }
-    if (target.dataset.navTarget) {
-      setActiveNav(target.dataset.navTarget);
-      scrollToPanel(target.dataset.navTarget);
+    if (target.dataset.composerMode) {
+      setComposerMode(target.dataset.composerMode);
+      return;
+    }
+    if (target.dataset.secondaryTab) {
+      openSecondaryTab(target.dataset.secondaryTab);
       return;
     }
     if (target.dataset.notePreset) {
-      void sendNote(target.dataset.notePreset);
+      void sendComposer(target.dataset.notePreset);
+      return;
+    }
+    if (target.dataset.useDecision) {
+      state.selectedDecisionId = target.dataset.useDecision;
+      setComposerMode('decision');
+      $('noteInput')?.focus();
       return;
     }
     if (target.dataset.answerQuestion) {
@@ -47,13 +57,9 @@ function bindGlobalActions() {
       void submitDecision(target.dataset.submitQuestion);
       return;
     }
-    if (target.dataset.focusDecision) {
-      const input = $('decisionAnswer_' + target.dataset.focusDecision);
-      if (input instanceof HTMLTextAreaElement) input.focus();
-      return;
-    }
     if (target.dataset.prefillNote) {
-      void sendNote(target.dataset.prefillNote);
+      setComposerMode('note');
+      void sendComposer(target.dataset.prefillNote);
       return;
     }
     if (target.dataset.completeTask) {
@@ -71,19 +77,16 @@ function bindGlobalActions() {
     if (target.dataset.editTask) {
       openTaskEdit(target.dataset.editTask);
       openSecondaryTab('tasks');
-      scrollToPanel('secondaryPanelTasks');
       return;
     }
     if (target.dataset.openTaskCreate) {
       openTaskCreate();
       openSecondaryTab('tasks');
-      scrollToPanel('secondaryPanelTasks');
       return;
     }
     if (target.dataset.toggleTaskImport) {
       toggleTaskImportPanel();
       openSecondaryTab('tasks');
-      scrollToPanel('secondaryPanelTasks');
       return;
     }
     if (target.dataset.closeTaskForm) {
@@ -115,18 +118,21 @@ function bindGlobalActions() {
       renderActionRail(state.dashboardData);
     }
   });
-
-  window.addEventListener('scroll', updateActiveNavFromScroll, { passive: true });
 }
 
 async function refresh() {
   try {
-    const response = await fetch('/api/dashboard');
-    if (!response.ok) throw new Error(await response.text());
-    state.dashboardData = await response.json();
+    if (isFixtureMode()) {
+      state.dashboardData = getFixtureDashboard(state.fixtureMode);
+    } else {
+      const response = await fetch('/api/dashboard');
+      if (!response.ok) throw new Error(await response.text());
+      state.dashboardData = await response.json();
+    }
     state.canEditAgent = state.dashboardData.layers?.power?.canEditAgentCommand
       || state.dashboardData.capabilities?.canEditAgentCommand
       || false;
+    renderFixtureSwitcher();
     renderHeader(state.dashboardData);
     renderPrimary(state.dashboardData);
     renderActionRail(state.dashboardData);
@@ -142,12 +148,18 @@ async function refresh() {
 
 bindGlobalActions();
 openSecondaryTab('tasks');
-setActiveNav('missionPanel');
+setComposerMode('note');
 autosizeComposer();
+setSidebarCollapsed(false);
+setDrawerCollapsed(false);
+renderFixtureSwitcher();
 void refresh();
-window.setInterval(() => { void refresh(); }, 4000);
+window.setInterval(() => {
+  if (isFixtureMode()) return;
+  void refresh();
+}, 4000);
 `;
 
 export function renderPanelScript(): string {
-  return [panelScriptUtils, panelScriptActions, panelScriptRenderers, panelScriptInit].join('\n');
+  return [panelScriptUtils, panelScriptFixtures, panelScriptActions, panelScriptRenderers, panelScriptInit].join('\n');
 }

@@ -10,7 +10,12 @@ const state = {
   taskImportVisible: false,
   secondaryTab: 'tasks',
   abortConfirmOpen: false,
-  activeNavTarget: 'missionPanel',
+  activeNavTarget: 'workspace',
+  sidebarCollapsed: false,
+  drawerCollapsed: false,
+  fixtureMode: new URLSearchParams(window.location.search).get('fixture') || 'live',
+  composerMode: 'note',
+  selectedDecisionId: '',
 };
 
 function $(id) {
@@ -135,7 +140,7 @@ function autosizeComposer() {
   const input = $('noteInput');
   if (!(input instanceof HTMLTextAreaElement)) return;
   input.style.height = '0px';
-  input.style.height = Math.min(input.scrollHeight, 130) + 'px';
+  input.style.height = Math.min(input.scrollHeight, 150) + 'px';
 }
 
 function openSecondaryTab(tab) {
@@ -146,12 +151,6 @@ function openSecondaryTab(tab) {
   document.querySelectorAll('[data-secondary-panel]').forEach((panel) => {
     panel.classList.toggle('is-active', panel.dataset.secondaryPanel === tab);
   });
-}
-
-function scrollToPanel(id) {
-  const target = $(id);
-  if (!target) return;
-  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function setTaskFormVisible(value) {
@@ -173,24 +172,60 @@ function toggleTaskImportPanel() {
 
 function setActiveNav(targetId) {
   state.activeNavTarget = targetId;
-  document.querySelectorAll('[data-nav-target]').forEach((button) => {
-    button.classList.toggle('is-active', button.dataset.navTarget === targetId);
-  });
 }
 
-function updateActiveNavFromScroll() {
-  const candidates = ['missionPanel', 'decisionsPanel', 'updatesPanel'];
-  let active = state.activeNavTarget;
-  let best = Number.POSITIVE_INFINITY;
-  candidates.forEach((id) => {
-    const node = $(id);
-    if (!node) return;
-    const distance = Math.abs(node.getBoundingClientRect().top - 120);
-    if (distance < best) {
-      best = distance;
-      active = id;
-    }
+function setSidebarCollapsed(value) {
+  state.sidebarCollapsed = value;
+  document.querySelector('.app-shell')?.classList.toggle('is-sidebar-collapsed', value);
+}
+
+function setDrawerCollapsed(value) {
+  state.drawerCollapsed = value;
+  document.querySelector('.app-shell')?.classList.toggle('is-drawer-collapsed', value);
+  const button = $('drawerToggleBtn');
+  if (button) button.textContent = value ? 'Context を開く' : 'Context';
+}
+
+function setComposerMode(mode) {
+  state.composerMode = mode;
+  document.querySelectorAll('[data-composer-mode]').forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.composerMode === mode);
   });
-  setActiveNav(active);
+  const input = $('noteInput');
+  const send = $('sendNoteBtn');
+  if (!(input instanceof HTMLTextAreaElement) || !(send instanceof HTMLButtonElement)) return;
+  if (mode === 'task') {
+    input.placeholder = '1行目に task title、2行目以降に summary / done definition';
+    send.textContent = 'task 追加';
+    return;
+  }
+  if (mode === 'decision') {
+    input.placeholder = 'decision への回答内容を書く';
+    send.textContent = 'decision 送信';
+    return;
+  }
+  input.placeholder = '補足・判断・依頼を短く送る';
+  send.textContent = '送信';
+}
+
+function isFixtureMode() {
+  return state.fixtureMode && state.fixtureMode !== 'live';
+}
+
+function setFixtureMode(mode) {
+  state.fixtureMode = mode;
+  const url = new URL(window.location.href);
+  if (mode === 'live') {
+    url.searchParams.delete('fixture');
+  } else {
+    url.searchParams.set('fixture', mode);
+  }
+  window.history.replaceState({}, '', url);
+  renderFixtureSwitcher();
+  void refresh();
+}
+
+function firstPendingDecisionId(dashboard) {
+  return dashboard?.pendingDecisions?.[0]?.id || '';
 }
 `;
