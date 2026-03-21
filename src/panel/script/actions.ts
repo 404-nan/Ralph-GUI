@@ -1,5 +1,9 @@
 export const panelScriptActions = String.raw`
 async function api(path, body) {
+  if (isFixtureMode()) {
+    return fixtureApi(path, body);
+  }
+
   const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -38,7 +42,7 @@ async function doResume() {
 
 function doAbort() {
   state.abortConfirmOpen = true;
-  renderPrimary(state.dashboardData);
+  renderActionRail(state.dashboardData);
 }
 
 async function confirmAbort() {
@@ -231,5 +235,60 @@ async function saveAdvancedSettings(event) {
   state.settingsDirty = false;
   toast('詳細設定を保存しました', 'success');
   await refresh();
+}
+
+async function quickCreateTaskFromComposer() {
+  const input = $('noteInput');
+  if (!(input instanceof HTMLTextAreaElement)) return;
+  const value = input.value.trim();
+  if (!value) {
+    toast('task 内容を書いてください', 'warning');
+    return;
+  }
+  const [titleLine, ...rest] = value.split(/\n+/);
+  const title = titleLine.trim();
+  const summary = rest.join('\n').trim();
+  if (!title) {
+    toast('1行目に task title を書いてください', 'warning');
+    return;
+  }
+
+  const result = await api('/api/task/create', { title, summary });
+  if (!result) return;
+  input.value = '';
+  autosizeComposer();
+  toast('composer から task を追加しました', 'success');
+  await refresh();
+}
+
+async function sendComposer(prefill) {
+  if (prefill) {
+    return sendNote(prefill);
+  }
+  if (state.composerMode === 'task') {
+    return quickCreateTaskFromComposer();
+  }
+  if (state.composerMode === 'decision') {
+    const decisionId = state.selectedDecisionId || firstPendingDecisionId(state.dashboardData);
+    if (!decisionId) {
+      toast('送信先の decision がありません', 'warning');
+      return;
+    }
+    const input = $('noteInput');
+    if (!(input instanceof HTMLTextAreaElement)) return;
+    const answer = input.value.trim();
+    if (!answer) {
+      toast('decision への回答を書いてください', 'warning');
+      return;
+    }
+    const result = await api('/api/answer', { questionId: decisionId, answer });
+    if (!result) return;
+    input.value = '';
+    autosizeComposer();
+    toast('decision を送信しました', 'success');
+    await refresh();
+    return;
+  }
+  return sendNote();
 }
 `;

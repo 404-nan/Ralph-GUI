@@ -34,37 +34,76 @@ function formatTaskStatus(task) {
 }
 
 function missionCopy(dashboard) {
-  const status = dashboard.status || {};
   const currentTask = dashboard.currentTask;
   const nextTask = dashboard.nextTask;
   const decisions = dashboard.pendingDecisions || [];
   const blockers = dashboard.blockers || [];
   const taskCount = (dashboard.taskBoard || []).length;
 
-  const now = currentTask
-    ? '現在は「' + currentTask.title + '」を進めています。'
-    : taskCount === 0
-      ? '現在は task がありません。'
-      : '現在の active task はありません。';
+  const summary = dashboard.workspace?.goal
+    || (currentTask
+      ? '現在は「' + currentTask.title + '」を深く進める workspace です。'
+      : '現在の task を決める workspace です。');
 
-  let next = '次のアクションを整理中です。';
+  let next = '次アクションを整理中です。';
   if (decisions.length > 0) {
     next = '次に、pending decision へ回答してください。';
   } else if (blockers.length > 0) {
-    next = '次に、blocker を解除する判断かメモが必要です。';
-  } else if (taskCount === 0) {
-    next = '次に、task を1件追加すると開始できます。';
+    next = '次に、blocker を解除する判断が必要です。';
   } else if (nextTask) {
-    next = '次は「' + nextTask.title + '」が候補です。';
-  } else if (currentTask) {
-    next = '次に続く task を追加すると queue が安定します。';
+    next = '次に続く task は「' + nextTask.title + '」です。';
+  } else if (taskCount === 0) {
+    next = '最初の task を追加すると開始できます。';
   }
 
   return {
-    status: status.thinkingText || status.currentStatusText || '待機しています。',
-    now,
+    status: dashboard.workspace?.scenarioLabel || dashboard.status?.thinkingText || dashboard.status?.currentStatusText || '待機しています。',
+    summary,
     next,
   };
+}
+
+function deriveWorkspace(dashboard) {
+  const fallbackSource = dashboard.settings?.promptBody?.trim()
+    ? dashboard.settings.promptBody.trim()
+    : dashboard.settings?.promptFile || 'source spec is not configured';
+  return dashboard.workspace || {
+    scenarioLabel: 'Live workspace',
+    goal: dashboard.currentTask?.summary || '現在の task を進めるための context を整理する。',
+    doneDefinition: dashboard.currentTask?.acceptanceCriteria?.join(' / ') || dashboard.currentTask?.summary || '次アクションが明確であること。',
+    sourceSpec: fallbackSource,
+    primaryAction: dashboard.pendingDecisions?.[0]
+      ? { label: 'decision に答える', dataset: { useDecision: dashboard.pendingDecisions[0].id }, className: 'btn btn-primary btn-small' }
+      : { label: 'Tasks を確認', dataset: { secondaryTab: 'tasks' }, className: 'btn btn-primary btn-small' },
+    relations: [
+      { label: 'parent · ' + (dashboard.settings?.taskName || 'workspace root'), tone: '' },
+      { label: 'child · ' + ((dashboard.nextTask && dashboard.nextTask.title) || 'none'), tone: '' },
+      { label: 'blocked-by · ' + ((dashboard.blockers?.[0] && dashboard.blockers[0].text) || 'none'), tone: dashboard.blockers?.length ? 'is-blocked' : '' },
+      { label: 'related · Inbox / Tasks / Decisions', tone: '' },
+    ],
+    chat: [
+      { role: 'system', label: 'mission', copy: dashboard.status?.currentStatusText || 'workspace を確認しています。', meta: 'run status' },
+      { role: 'agent', label: 'next action', copy: dashboard.currentTask ? '現在の task は「' + dashboard.currentTask.title + '」です。' : 'active task はありません。', meta: 'derived summary' },
+    ],
+  };
+}
+
+function createRelationChip(item) {
+  return el('span', { className: ['relation-chip', item.tone || ''].filter(Boolean).join(' '), text: item.label });
+}
+
+function createContextCard(label, value) {
+  return el('article', { className: 'context-card' }, [
+    el('div', { className: 'context-card__label', text: label }),
+    el('div', { className: 'context-card__value', text: value }),
+  ]);
+}
+
+function createChatBubble(entry) {
+  return el('article', { className: 'chat-bubble chat-bubble--' + (entry.role || 'system') }, [
+    el('div', { className: 'chat-bubble__meta', text: (entry.label || 'note') + ' · ' + (entry.meta || '') }),
+    el('div', { className: 'chat-bubble__copy', text: entry.copy || '' }),
+  ]);
 }
 
 function createTaskSummary(task, options = {}) {
@@ -110,18 +149,23 @@ function createDecisionEntry(decision) {
     el('div', { className: 'entry-title', text: decision.title }),
     el('div', { className: 'entry-copy', text: '推奨: ' + decision.recommendedAnswer }),
     el('div', { className: 'entry-copy', text: '保留時: ' + decision.fallbackAnswer }),
-    el('div', { className: 'entry-actions' }, decision.choices.map((choice) => {
-      if (choice.kind === 'custom') {
-        return createActionButton(choice.label, { focusDecision: decision.id });
-      }
-      return createActionButton(
-        choice.label,
-        { answerQuestion: decision.id, answerValue: choice.answer || '' },
-        choice.id === 'recommended' ? 'btn btn-primary btn-small' : 'btn btn-ghost btn-small',
-      );
-    })),
+    el('div', { className: 'entry-actions' }, [
+      ...decision.choices.map((choice) => {
+        if (choice.kind === 'custom') {
+          return createActionButton(choice.label, { useDecision: decision.id });
+        }
+        return createActionButton(
+          choice.label,
+          { answerQuestion: decision.id, answerValue: choice.answer || '' },
+          choice.id === 'recommended' ? 'btn btn-primary btn-small' : 'btn btn-ghost btn-small',
+        );
+      }),
+    ]),
     el('textarea', { attrs: { rows: '2', id: 'decisionAnswer_' + decision.id, placeholder: '別案があればここに記入' } }),
-    el('div', { className: 'entry-actions' }, [createActionButton('この内容で送信', { submitQuestion: decision.id }, 'btn btn-ghost btn-small')]),
+    el('div', { className: 'entry-actions' }, [
+      createActionButton('composer で答える', { useDecision: decision.id }),
+      createActionButton('この内容で送信', { submitQuestion: decision.id }, 'btn btn-ghost btn-small'),
+    ]),
   ]);
 }
 
@@ -144,6 +188,21 @@ function createTimelineEntry(item) {
   ]);
 }
 
+function renderFixtureSwitcher() {
+  const host = $('fixtureSwitcher');
+  if (!showFixtureSwitcher()) {
+    host.classList.add('is-hidden');
+    host.replaceChildren();
+    return;
+  }
+  host.classList.remove('is-hidden');
+  renderInto(host, FIXTURE_MODES.map((mode) => createActionButton(
+    mode === 'live' ? 'live data' : mode,
+    { fixtureMode: mode },
+    'fixture-chip' + (state.fixtureMode === mode ? ' is-active' : ''),
+  )));
+}
+
 function renderHeader(dashboard) {
   const status = dashboard.status || {};
   const surface = dashboard.layers?.surface || {};
@@ -157,7 +216,7 @@ function renderHeader(dashboard) {
   $('topbarProjectPath').textContent = surface.projectPath || '作業フォルダ未設定';
   $('topbarModel').textContent = surface.modelLabel || '確認中';
   $('topbarModel').title = surface.modelDetail || '';
-  $('healthSummary').textContent = '要対応 ' + (decisions + blockers + errors) + ' / 注意 ' + warnings;
+  $('healthSummary').textContent = 'decision ' + decisions + ' / blocker ' + blockers + ' / error ' + errors + ' / warn ' + warnings;
 
   const pill = $('lifecyclePill');
   pill.className = 'status-pill ' + lcCls(status.lifecycle);
@@ -176,65 +235,105 @@ function renderHeader(dashboard) {
 function renderPrimary(dashboard) {
   const run = dashboard.layers?.control?.run || {};
   const mission = missionCopy(dashboard);
+  const workspace = deriveWorkspace(dashboard);
+  const firstDecisionId = firstPendingDecisionId(dashboard);
+  if (!firstDecisionId) {
+    state.selectedDecisionId = '';
+  } else if (!state.selectedDecisionId || !(dashboard.pendingDecisions || []).some((item) => item.id === state.selectedDecisionId)) {
+    state.selectedDecisionId = firstDecisionId;
+  }
+
   renderInto($('summaryMetrics'), [
     createMetric('進行中', run.activeTaskCount || 0),
     createMetric('待機', run.queuedTaskCount || 0),
-    createMetric('確認待ち', run.pendingDecisionCount || 0),
+    createMetric('判断待ち', (dashboard.pendingDecisions || []).length + (dashboard.blockers || []).length),
     createMetric('完了', run.completedTaskCount || 0),
   ]);
 
-  $('summaryStatus').textContent = mission.status;
-  $('missionNow').textContent = mission.now;
-  $('missionNext').textContent = mission.next;
+  $('workspaceEyebrow').textContent = workspace.scenarioLabel || 'task workspace';
+  $('workspaceHeading').textContent = dashboard.currentTask?.title || dashboard.settings?.taskName || 'Task workspace';
+  $('workspaceSummary').textContent = mission.summary + ' ' + mission.next;
 
-  const emptyTaskActions = [
-    el('div', { className: 'entry-actions' }, [
-      createActionButton('task を追加', { openTaskCreate: '1' }, 'btn btn-primary btn-small'),
-      createActionButton('まとめて追加', { toggleTaskImport: '1' }),
-      createActionButton('サンプル方針を送る', { notePreset: '最初の task を分解して提案してください' }),
+  renderInto($('workspaceHeader'), el('div', { className: 'workspace-header__meta' }, [
+    el('div', { className: 'workspace-header__chips' }, [
+      createInlineChip('status · ' + mission.status),
+      createInlineChip('current · ' + (dashboard.currentTask?.id || 'none')),
+      createInlineChip('next · ' + (dashboard.nextTask?.id || 'none')),
     ]),
-  ];
+    el('div', { className: 'workspace-header__id', text: dashboard.currentTask?.id || 'WORKSPACE' }),
+    el('div', { className: 'workspace-header__title', text: dashboard.currentTask?.title || dashboard.settings?.taskName || 'Task workspace' }),
+    el('div', { className: 'workspace-header__summary', text: dashboard.currentTask?.summary || mission.summary }),
+    el('div', { className: 'workspace-relations' }, (workspace.relations || []).map(createRelationChip)),
+  ]));
 
-  renderInto($('currentTaskPanel'), createTaskSummary(dashboard.currentTask, {
-    emptyTitle: '進行中の task はありません',
-    emptyCopy: '最初の task を追加するか、queue を整理してください。',
-    emptyActions: emptyTaskActions,
-  }));
-
-  renderInto($('nextTaskPanel'), createTaskSummary(dashboard.nextTask, {
-    allowPrioritize: true,
-    emptyTitle: dashboard.currentTask ? '次の task は未設定です' : '次の task はありません',
-    emptyCopy: dashboard.currentTask ? '続きの task を追加すると次アクションが明確になります。' : '最初の task を追加するとここに次候補が出ます。',
-    emptyActions: [
-      el('div', { className: 'entry-actions' }, [
-        createActionButton('続きの task を追加', { openTaskCreate: '1' }, 'btn btn-primary btn-small'),
-        createActionButton('Tasks を開く', { secondaryTab: 'tasks' }),
+  renderInto($('taskContextStrip'), [
+    el('div', { className: 'section-head' }, [
+      el('div', {}, [
+        el('p', { className: 'section-kicker', text: 'sticky context' }),
+        el('h2', { className: 'section-title', text: 'goal / done definition / source spec' }),
       ]),
-    ],
-  }));
+    ]),
+    el('div', { className: 'context-strip__items' }, [
+      createContextCard('task goal', workspace.goal || '—'),
+      createContextCard('done definition', workspace.doneDefinition || '—'),
+      createContextCard('source spec', workspace.sourceSpec || '—'),
+    ]),
+  ]);
 
-  const updates = [];
-  const humanizedEvents = (dashboard.recentEvents || []).map(humanizeEvent).filter(Boolean);
-  const recent = [...(dashboard.artifacts || []).map((artifact) => ({
-    title: artifact.title,
-    summary: artifact.summary,
-    meta: fTime(artifact.timestamp),
-  })), ...humanizedEvents].slice(0, 5);
-  if (recent.length === 0) {
-    updates.push(createEmptyState('更新はまだありません', 'run が動き始めると、完了・失敗・判断要求をここに集約します。'));
-  } else {
-    recent.forEach((item) => updates.push(createTimelineEntry(item)));
-  }
-  renderInto($('recentUpdatesPanel'), el('div', { className: 'timeline' }, updates));
+  renderInto($('workspacePrimaryAction'), workspace.primaryAction
+    ? createActionButton(workspace.primaryAction.label, workspace.primaryAction.dataset, workspace.primaryAction.className)
+    : []);
+  renderInto($('workspaceTimeline'), (workspace.chat || []).map(createChatBubble));
 
   const composerContext = $('composerContext');
-  if (dashboard.currentTask) {
-    composerContext.textContent = '今の対象: ' + dashboard.currentTask.title;
-    composerContext.classList.remove('is-hidden');
-  } else {
-    composerContext.textContent = '';
-    composerContext.classList.add('is-hidden');
-  }
+  const composerLabel = state.composerMode === 'decision'
+    ? 'decision target: ' + (state.selectedDecisionId || firstPendingDecisionId(dashboard) || 'none')
+    : dashboard.currentTask
+      ? 'current task: ' + dashboard.currentTask.title
+      : 'task を選択してください';
+  composerContext.textContent = composerLabel;
+  composerContext.classList.remove('is-hidden');
+
+  renderInto($('railMission'), [
+    el('button', { className: 'rail-linkish', dataset: { secondaryTab: 'tasks' }, attrs: { type: 'button' } }, [
+      el('span', { className: 'rail-item__icon is-current' }),
+      el('span', {}, [
+        el('div', { className: 'rail-item__label', text: workspace.scenarioLabel || 'workspace' }),
+        el('div', { className: 'rail-copy', text: mission.next }),
+      ]),
+    ]),
+    el('button', { className: 'rail-linkish', dataset: { fixtureMode: 'plan-review' }, attrs: { type: 'button' } }, [
+      el('span', { className: 'rail-item__icon' }),
+      el('span', {}, [
+        el('div', { className: 'rail-item__label', text: 'plan review' }),
+        el('div', { className: 'rail-copy', text: 'spec import 後の構図を確認' }),
+      ]),
+    ]),
+    el('button', { className: 'rail-linkish', dataset: { fixtureMode: 'active-workspace' }, attrs: { type: 'button' } }, [
+      el('span', { className: 'rail-item__icon is-next' }),
+      el('span', {}, [
+        el('div', { className: 'rail-item__label', text: 'active task' }),
+        el('div', { className: 'rail-copy', text: '1 task = 1 chat の主画面' }),
+      ]),
+    ]),
+    el('button', { className: 'rail-linkish', dataset: { fixtureMode: 'blocked-waiting' }, attrs: { type: 'button' } }, [
+      el('span', { className: 'rail-item__icon is-blocked' }),
+      el('span', {}, [
+        el('div', { className: 'rail-item__label', text: 'blocked' }),
+        el('div', { className: 'rail-copy', text: 'decision / blocker を前に出す' }),
+      ]),
+    ]),
+  ]);
+
+  renderInto($('railTaskList'), (dashboard.taskBoard || []).slice(0, 6).map((task) => el('article', {
+    className: 'rail-item',
+  }, [
+    el('span', { className: 'rail-item__icon ' + (task.id === dashboard.currentTask?.id ? 'is-current' : task.displayStatus === 'blocked' ? 'is-blocked' : task.id === dashboard.nextTask?.id ? 'is-next' : '') }),
+    el('div', {}, [
+      el('div', { className: 'rail-item__label', text: task.id + ' · ' + task.title }),
+      el('div', { className: 'rail-item__meta', text: formatTaskStatus(task) + ' / ' + (task.source || 'manual') }),
+    ]),
+  ])));
 }
 
 function renderActionRail(dashboard) {
@@ -259,23 +358,21 @@ function renderActionRail(dashboard) {
     ]));
   }
 
-  if (decisions.length === 0) {
+  if (decisions.length === 0 && blockers.length === 0) {
     decisionNodes.push(createEmptyState(
       'pending decision はありません',
-      '人の判断が必要になったらここに最優先で表示します。',
+      '判断待ちや blocker が出たときだけここを開けば十分です。',
       createActionButton('Inbox を見る', { secondaryTab: 'inbox' }),
     ));
   } else {
     decisions.slice(0, 3).forEach((decision) => decisionNodes.push(createDecisionEntry(decision)));
-  }
-  if (blockers.length > 0) {
     blockers.slice(0, 2).forEach((blocker) => decisionNodes.push(createBlockerEntry(blocker)));
   }
   renderInto(decisionHost, el('div', { className: 'side-stack' }, decisionNodes));
 
   renderInto(quickHost, el('div', { className: 'quick-actions' }, [
     createActionButton('task 追加', { openTaskCreate: '1' }, 'btn btn-primary btn-small'),
-    createActionButton('まとめて追加', { toggleTaskImport: '1' }),
+    createActionButton('spec から追加', { toggleTaskImport: '1' }),
     createActionButton('Tasks を開く', { secondaryTab: 'tasks' }),
     createActionButton('Inbox を開く', { secondaryTab: 'inbox' }),
   ]));

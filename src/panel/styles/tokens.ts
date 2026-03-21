@@ -1,31 +1,33 @@
 export const panelStyleTokens = String.raw`
 :root {
   --bg: #f5f6f2;
-  --surface: #ffffff;
-  --surface-soft: #f7f8f4;
-  --surface-muted: #eef1ea;
-  --surface-strong: #e8efe7;
-  --line: #dfe5da;
-  --line-strong: #c7d2c2;
-  --text: #172019;
-  --text-dim: #344136;
-  --text-muted: #617064;
-  --accent: #12805b;
-  --accent-soft: rgba(18, 128, 91, 0.12);
-  --accent-strong: rgba(18, 128, 91, 0.22);
-  --warn: #b87415;
-  --warn-soft: rgba(184, 116, 21, 0.12);
-  --danger: #c34f42;
-  --danger-soft: rgba(195, 79, 66, 0.12);
-  --info: #476fce;
-  --info-soft: rgba(71, 111, 206, 0.12);
-  --ok: #187b48;
-  --ok-soft: rgba(24, 123, 72, 0.12);
-  --shadow-sm: 0 1px 2px rgba(10, 20, 10, 0.05);
-  --shadow-md: 0 12px 30px rgba(17, 25, 17, 0.07);
+  --bg-strong: #eef1eb;
+  --surface: rgba(255, 255, 255, 0.78);
+  --surface-elevated: rgba(255, 255, 255, 0.9);
+  --surface-soft: rgba(246, 247, 243, 0.9);
+  --surface-muted: rgba(239, 241, 236, 0.86);
+  --surface-inset: rgba(242, 244, 239, 0.94);
+  --surface-strong: rgba(233, 236, 230, 0.96);
+  --text: #182018;
+  --text-dim: #374338;
+  --text-muted: #707b71;
+  --accent: #4364df;
+  --accent-soft: rgba(67, 100, 223, 0.1);
+  --accent-strong: rgba(67, 100, 223, 0.18);
+  --warn: #b67a21;
+  --warn-soft: rgba(182, 122, 33, 0.12);
+  --danger: #c65241;
+  --danger-soft: rgba(198, 82, 65, 0.12);
+  --ok: #1b7a50;
+  --ok-soft: rgba(27, 122, 80, 0.11);
+  --shadow-xs: 0 1px 2px rgba(16, 24, 16, 0.025);
+  --shadow-sm: 0 8px 22px rgba(16, 24, 16, 0.05);
+  --shadow-md: 0 18px 48px rgba(16, 24, 16, 0.08);
+  --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.66);
   --radius-sm: 12px;
   --radius-md: 18px;
   --radius-lg: 24px;
+  --radius-xl: 28px;
   --sans: 'Manrope', 'Noto Sans JP', sans-serif;
   --mono: 'IBM Plex Mono', monospace;
   --ease: cubic-bezier(.2,.65,.3,1);
@@ -41,7 +43,8 @@ body {
   margin: 0;
   min-height: 100%;
   background:
-    radial-gradient(circle at top left, rgba(18, 128, 91, 0.05), transparent 24%),
+    radial-gradient(circle at top left, rgba(67, 100, 223, 0.045), transparent 22%),
+    radial-gradient(circle at 100% 0%, rgba(27, 122, 80, 0.03), transparent 20%),
     linear-gradient(180deg, #fafbf8, var(--bg));
   color: var(--text);
   font-family: var(--sans);
@@ -50,4 +53,5 @@ body {
 }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { border: 0; background: none; cursor: pointer; }
+a { color: inherit; }
 `;
