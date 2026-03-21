@@ -28,7 +28,7 @@ function makeConfig(rootDir: string): AppConfig {
     discordToken: '',
     discordNotifyChannelId: '',
     discordDmUserId: '',
-    discordAppName: 'RalphLoop',
+    discordAppName: 'RalphGUI',
     discordAllowedUserIds: [],
     discordGuildId: '',
     discordApplicationId: '',

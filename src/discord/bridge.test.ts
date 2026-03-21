@@ -30,7 +30,7 @@ function makeConfig(rootDir: string = '/tmp'): AppConfig {
     discordToken: 'token',
     discordNotifyChannelId: 'channel-1',
     discordDmUserId: '',
-    discordAppName: 'RalphLoop',
+    discordAppName: 'RalphGUI',
     discordAllowedUserIds: [],
     discordGuildId: '',
     discordApplicationId: '',

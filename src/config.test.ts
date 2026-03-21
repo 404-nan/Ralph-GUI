@@ -31,7 +31,7 @@ function createBaseConfig(): AppConfig {
     discordToken: '',
     discordNotifyChannelId: '',
     discordDmUserId: '',
-    discordAppName: 'RalphLoop',
+    discordAppName: 'RalphGUI',
     discordAllowedUserIds: [],
     discordGuildId: '',
     discordApplicationId: '',

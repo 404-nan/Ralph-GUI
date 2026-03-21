@@ -29,7 +29,7 @@ function makeConfig(rootDir: string): AppConfig {
     discordToken: '',
     discordNotifyChannelId: '',
     discordDmUserId: '',
-    discordAppName: 'RalphLoop',
+    discordAppName: 'RalphGUI',
     discordAllowedUserIds: [],
     discordGuildId: '',
     discordApplicationId: '',
@@ -38,7 +38,7 @@ function makeConfig(rootDir: string): AppConfig {
 }
 
 test('RunActions consumes local answer inbox once and injects it only once', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
   const config = makeConfig(rootDir);
@@ -66,7 +66,7 @@ test('RunActions consumes local answer inbox once and injects it only once', asy
 });
 
 test('RunActions derives MaxIntegration from prd task volume', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
   writeFileSync(
@@ -105,7 +105,7 @@ test('RunActions derives MaxIntegration from prd task volume', async () => {
 });
 
 test('RunActions starts empty when no task catalog is configured', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -125,7 +125,7 @@ test('RunActions starts empty when no task catalog is configured', async () => {
 });
 
 test('RunActions updates runtime settings and exposes them in dashboard', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   mkdirSync(join(rootDir, 'workspace'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
@@ -162,7 +162,7 @@ test('RunActions updates runtime settings and exposes them in dashboard', async 
 });
 
 test('RunActions preserves agent assignments on seeded tasks across catalog synchronization', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
   writeFileSync(
@@ -207,7 +207,7 @@ test('RunActions preserves agent assignments on seeded tasks across catalog sync
 });
 
 test('RunActions resetRuntimeData clears operational state and restores startup defaults', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   mkdirSync(join(rootDir, 'workspace'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
@@ -267,7 +267,7 @@ test('RunActions resetRuntimeData clears operational state and restores startup 
 });
 
 test('RunActions requestRunStart clears previous run artifacts', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -292,7 +292,7 @@ test('RunActions requestRunStart clears previous run artifacts', async () => {
 });
 
 test('RunActions requestRunStart preserves unread local inbox entries for the next run', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -315,7 +315,7 @@ test('RunActions requestRunStart preserves unread local inbox entries for the ne
 });
 
 test('RunActions requestRunStart rejects duplicate queued runs', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -335,7 +335,7 @@ test('RunActions requestRunStart rejects duplicate queued runs', async () => {
 });
 
 test('RunActions rejects answers for unknown questions', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -356,7 +356,7 @@ test('RunActions rejects answers for unknown questions', async () => {
 });
 
 test('RunActions requestRunStart rejects invalid prompt settings', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -382,7 +382,7 @@ test('RunActions requestRunStart rejects invalid prompt settings', async () => {
 });
 
 test('RunActions requestRunStart rejects invalid execution directories', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -407,7 +407,7 @@ test('RunActions requestRunStart rejects invalid execution directories', async (
 });
 
 test('RunActions pauseRun rejects idle runs instead of deadlocking future starts', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -429,7 +429,7 @@ test('RunActions pauseRun rejects idle runs instead of deadlocking future starts
 });
 
 test('RunActions recovers stale active run state on bootstrap', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -454,7 +454,7 @@ test('RunActions recovers stale active run state on bootstrap', async () => {
 });
 
 test('RunActions creates, updates, completes, and reopens tasks while tracking current and next task', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
   writeFileSync(
@@ -521,7 +521,7 @@ test('RunActions creates, updates, completes, and reopens tasks while tracking c
 });
 
 test('RunActions rejects remote agentCommand overrides by default but allows local CLI changes', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -550,7 +550,7 @@ test('RunActions rejects remote agentCommand overrides by default but allows loc
 });
 
 test('RunActions preserves manual seeded task edits across task catalog synchronization', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
   writeFileSync(
@@ -591,7 +591,7 @@ test('RunActions preserves manual seeded task edits across task catalog synchron
 });
 
 test('RunActions previews and imports tasks from pasted specs in order', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -629,7 +629,7 @@ test('RunActions previews and imports tasks from pasted specs in order', async (
 });
 
 test('RunActions imports appended local inbox answers without skipping later lines', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -669,7 +669,7 @@ test('RunActions imports appended local inbox answers without skipping later lin
 });
 
 test('RunActions retries invalid inbox lines after the file is corrected', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
 
@@ -701,7 +701,7 @@ test('RunActions retries invalid inbox lines after the file is corrected', async
 });
 
 test('RunActions getDashboardData does not rewrite state files when nothing changed', async () => {
-  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-loop-'));
+  const rootDir = mkdtempSync(join(tmpdir(), 'ralph-gui-'));
   mkdirSync(join(rootDir, 'prompts'), { recursive: true });
   writeFileSync(join(rootDir, 'prompts', 'supervisor.md'), 'base prompt', { encoding: 'utf8' });
   writeFileSync(

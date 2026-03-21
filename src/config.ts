@@ -265,7 +265,7 @@ export function loadConfig(rootDir: string = process.cwd()): AppConfig {
     discordToken,
     discordNotifyChannelId: process.env.RALPH_DISCORD_NOTIFY_CHANNEL_ID ?? '',
     discordDmUserId: process.env.RALPH_DISCORD_DM_USER_ID ?? '',
-    discordAppName: process.env.RALPH_DISCORD_APP_NAME ?? 'RalphLoop',
+    discordAppName: process.env.RALPH_DISCORD_APP_NAME ?? 'RalphGUI',
     discordAllowedUserIds,
     discordGuildId: process.env.RALPH_DISCORD_GUILD_ID ?? '',
     discordApplicationId: process.env.RALPH_DISCORD_APPLICATION_ID ?? '',

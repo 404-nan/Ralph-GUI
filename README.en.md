@@ -1,6 +1,6 @@
-# RalphLoop v1.1
+# RalphGUI v1.1
 
-RalphLoop is a task-first orchestration loop for Codex. It keeps a single shared state across the web panel, supervisor, and optional Discord bridge so operators can always answer three questions:
+RalphGUI is a task-first orchestration loop for Codex. It keeps a single shared state across the web panel, supervisor, and optional Discord bridge so operators can always answer three questions:
 
 - What is in progress right now?
 - What gets handed off next?
@@ -27,7 +27,7 @@ If you want a global `ralph` command on your machine, run:
 npm link
 ```
 
-## What RalphLoop Does
+## What RalphGUI Does
 
 - Runs `start / run / start-run / configure / reset / panel / supervisor / discord / demo / status / check` from one CLI
 - Keeps task status, questions, answers, blockers, logs, and runtime settings in flat files

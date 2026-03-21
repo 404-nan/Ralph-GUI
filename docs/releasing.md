@@ -1,4 +1,4 @@
-# Releasing RalphLoop
+# Releasing RalphGUI
 
 ## v1.0 release gate
 

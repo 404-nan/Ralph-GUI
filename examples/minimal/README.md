@@ -1,6 +1,6 @@
 # Minimal Example
 
-最短で RalphLoop を試すための最小構成です。
+最短で RalphGUI を試すための最小構成です。
 
 この example は Codex CLI を前提にせず、`demo` mode で自己完結します。repo を clone した直後でも、そのまま確認できます。
 

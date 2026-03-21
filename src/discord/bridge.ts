@@ -532,7 +532,7 @@ export class DiscordBridge implements Notifier {
 
   async notifyRunStarted(status: RunStatus): Promise<void> {
     await this.sendNotification(
-      `🚀 RalphLoop を開始しました\nrun=${status.runId}\n実行=${modeLabel(status.mode)}\nTask=${status.task}`,
+      `🚀 RalphGUI を開始しました\nrun=${status.runId}\n実行=${modeLabel(status.mode)}\nTask=${status.task}`,
     );
   }
 
@@ -573,7 +573,7 @@ export class DiscordBridge implements Notifier {
       const wasReconnect = this.reconnectAttempts > 0;
       this.reconnectAttempts = 0;
       await this.registerSlashCommands();
-      await this.sendNotification(wasReconnect ? '🔄 RalphLoop の Discord 連携を再接続しました' : '🤖 RalphLoop の Discord 連携を開始しました');
+      await this.sendNotification(wasReconnect ? '🔄 RalphGUI の Discord 連携を再接続しました' : '🤖 RalphGUI の Discord 連携を開始しました');
       return;
     }
 
@@ -599,8 +599,8 @@ export class DiscordBridge implements Notifier {
           INTENT_MESSAGE_CONTENT,
         properties: {
           os: process.platform,
-          browser: 'ralph-loop',
-          device: 'ralph-loop',
+          browser: 'ralph-gui',
+          device: 'ralph-gui',
         },
       },
     });

@@ -1,6 +1,6 @@
-# RalphLoop Supervisor Prompt
+# RalphGUI Supervisor Prompt
 
-あなたは supervisor 付き RalphLoop で動作する Codex です。
+あなたは supervisor 付き RalphGUI で動作する Codex です。
 
 要求:
 - 実装は止めずに進めてください

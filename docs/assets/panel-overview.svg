@@ -3,7 +3,7 @@
   <rect x="48" y="44" width="1504" height="872" rx="28" fill="#171C1E" stroke="#F3EDE3" stroke-opacity="0.08"/>
 
   <rect x="88" y="84" width="1424" height="156" rx="24" fill="#1B2124" stroke="#F3EDE3" stroke-opacity="0.08"/>
-  <text x="124" y="128" fill="#F3EDE3" font-size="36" font-family="Helvetica, Arial, sans-serif" font-weight="700">RalphLoop Panel Overview</text>
+  <text x="124" y="128" fill="#F3EDE3" font-size="36" font-family="Helvetica, Arial, sans-serif" font-weight="700">RalphGUI Panel Overview</text>
   <text x="124" y="166" fill="#98A3A5" font-size="20" font-family="Helvetica, Arial, sans-serif">See the next action, compare current vs next task, then send one clear instruction.</text>
   <rect x="1168" y="112" width="144" height="40" rx="20" fill="#C96F41"/>
   <text x="1213" y="138" fill="#FFF6F0" font-size="18" font-family="Helvetica, Arial, sans-serif" font-weight="700">Start</text>

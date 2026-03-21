@@ -16,8 +16,8 @@ AGENT_CMD="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -z "$AGENT_CMD" ]; then
-  echo "使い方: ./ralph-loop/ralph.sh \"<agent command>\" [最大反復回数]"
-  echo "例: ./ralph-loop/ralph.sh \"codex exec --full-auto\" 20"
+  echo "使い方: ./ralph-gui/ralph.sh \"<agent command>\" [最大反復回数]"
+  echo "例: ./ralph-gui/ralph.sh \"codex exec --full-auto\" 20"
   echo "環境変数:"
   echo "  MAX_ITERATIONS (既定: 10)"
   echo "  SLEEP_SECONDS (既定: 2)"
