@@ -52,7 +52,7 @@ function makeRoot(): string {
   return rootDir;
 }
 
-test('FileStateStore initializes v10 metadata and run report files', async () => {
+test('FileStateStore initializes v1 metadata and run report files', async () => {
   const rootDir = makeRoot();
   const config = makeConfig(rootDir);
   const store = new FileStateStore(config);
@@ -68,7 +68,7 @@ test('FileStateStore initializes v10 metadata and run report files', async () =>
   rmSync(rootDir, { recursive: true, force: true });
 });
 
-test('FileStateStore migrates legacy status and tasks into the v10 schema', async () => {
+test('FileStateStore migrates legacy status and tasks into the v1 schema', async () => {
   const rootDir = makeRoot();
   const config = makeConfig(rootDir);
   mkdirSync(config.stateDir, { recursive: true });
@@ -174,6 +174,23 @@ test('FileStateStore resetRuntimeData clears run-report artifacts as well as leg
   assert.deepEqual(store.readRunReport().changedFiles, []);
   assert.equal(readFileSync(join(config.stateDir, 'events.jsonl'), 'utf8'), '');
   assert.equal(readFileSync(join(config.logDir, 'agent-output.log'), 'utf8'), '');
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('FileStateStore recreates the state directory before atomic writes', async () => {
+  const rootDir = makeRoot();
+  const config = makeConfig(rootDir);
+  const store = new FileStateStore(config);
+  await store.ensureInitialized();
+
+  rmSync(config.stateDir, { recursive: true, force: true });
+  const status = store.readStatus();
+  status.runReason = 'Recovered after missing state directory.';
+  store.writeStatus(status);
+
+  assert.equal(existsSync(join(config.stateDir, 'status.json')), true);
+  assert.equal(store.readStatus().runReason, 'Recovered after missing state directory.');
 
   rmSync(rootDir, { recursive: true, force: true });
 });

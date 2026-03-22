@@ -7,7 +7,7 @@
 3. `npm run check`
 4. `npm run smoke`
 5. `npm run build`
-6. `./ralph demo`
+6. `ralph demo`
 7. panel の主要導線を目視確認
 8. `CHANGELOG.md` を更新
 9. `package.json` の version を更新

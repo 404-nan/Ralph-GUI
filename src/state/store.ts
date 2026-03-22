@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { readFile, appendFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import type { AppConfig } from '../config.ts';
 import { toPortableDisplayPath } from '../shared/path.ts';
@@ -676,6 +676,7 @@ export class FileStateStore {
   }
 
   private writeJson(filePath: string, data: unknown): void {
+    mkdirSync(dirname(filePath), { recursive: true });
     const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     writeFileSync(tempPath, stableStringify(data), 'utf8');
     renameSync(tempPath, filePath);

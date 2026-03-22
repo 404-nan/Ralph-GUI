@@ -56,7 +56,7 @@ test('parseTasksFromSpecText extracts list items, nested acceptance criteria, an
 
 test('parseTasksFromSpecText suggests splits for long heading-style items', () => {
   const preview = parseTasksFromSpecText(`
-# Ralph Loop v10
+# Ralph Loop v1
 
 ## Panel を整理する
 Current task card と next-up queue と blocker card と artifact card と setup wizard を 1 画面で監督しやすくする。さらに import preview と dedupe merge と split suggestion を入れる。
