@@ -8,6 +8,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 
 import type { RunActions } from '../actions/run-actions.ts';
@@ -31,8 +32,26 @@ export interface PanelServerHooks {
 const JSON_BODY_LIMIT = 1024 * 1024;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-5AB5DC11E5B5';
 const WS_TOKEN_TTL_MS = 5 * 60 * 1000;
-const wsClients = new Set<Duplex>();
-const wsSessionTokens = new Map<string, number>();
+
+interface PanelRealtimeState {
+  wsClients: Set<Duplex>;
+  wsSessionTokens: Map<string, number>;
+}
+
+function createRealtimeState(): PanelRealtimeState {
+  return {
+    wsClients: new Set<Duplex>(),
+    wsSessionTokens: new Map<string, number>(),
+  };
+}
+
+function disposeRealtimeState(state: PanelRealtimeState): void {
+  state.wsSessionTokens.clear();
+  for (const socket of state.wsClients) {
+    socket.destroy();
+  }
+  state.wsClients.clear();
+}
 
 class HttpError extends Error {
   readonly statusCode: number;
@@ -286,36 +305,36 @@ function asMovePosition(
   );
 }
 
-function pruneExpiredTokens(): void {
+function pruneExpiredTokens(state: PanelRealtimeState): void {
   const now = Date.now();
-  for (const [token, expiresAt] of wsSessionTokens.entries()) {
+  for (const [token, expiresAt] of state.wsSessionTokens.entries()) {
     if (expiresAt <= now) {
-      wsSessionTokens.delete(token);
+      state.wsSessionTokens.delete(token);
     }
   }
 }
 
-function issueWsToken(): { token: string; expiresAt: string } {
-  pruneExpiredTokens();
+function issueWsToken(state: PanelRealtimeState): { token: string; expiresAt: string } {
+  pruneExpiredTokens(state);
   const token = randomBytes(24).toString('base64url');
   const expiresAt = Date.now() + WS_TOKEN_TTL_MS;
-  wsSessionTokens.set(token, expiresAt);
+  state.wsSessionTokens.set(token, expiresAt);
   return { token, expiresAt: new Date(expiresAt).toISOString() };
 }
 
-function consumeWsToken(token: string | null): boolean {
-  pruneExpiredTokens();
+function consumeWsToken(state: PanelRealtimeState, token: string | null): boolean {
+  pruneExpiredTokens(state);
   if (!token) {
     return false;
   }
 
-  const expiresAt = wsSessionTokens.get(token);
+  const expiresAt = state.wsSessionTokens.get(token);
   if (!expiresAt || expiresAt <= Date.now()) {
-    wsSessionTokens.delete(token);
+    state.wsSessionTokens.delete(token);
     return false;
   }
 
-  wsSessionTokens.delete(token);
+  state.wsSessionTokens.delete(token);
   return true;
 }
 
@@ -342,25 +361,30 @@ function encodeWsFrame(data: string): Buffer {
   return Buffer.concat([header, payload]);
 }
 
-function broadcast(message: Record<string, unknown>): void {
+function broadcast(state: PanelRealtimeState, message: Record<string, unknown>): void {
   const frame = encodeWsFrame(JSON.stringify(message));
-  for (const socket of wsClients) {
+  for (const socket of state.wsClients) {
     try {
       socket.write(frame);
     } catch {
-      wsClients.delete(socket);
+      state.wsClients.delete(socket);
     }
   }
 }
 
-function handleWsUpgrade(request: IncomingMessage, socket: Duplex, config: AppConfig): void {
+function handleWsUpgrade(
+  request: IncomingMessage,
+  socket: Duplex,
+  config: AppConfig,
+  state: PanelRealtimeState,
+): void {
   if (!isTrustedOrigin(request, config)) {
     writeWsUnauthorized(socket, 403, 'Untrusted origin.');
     return;
   }
 
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-  if (!consumeWsToken(url.searchParams.get('token'))) {
+  if (!consumeWsToken(state, url.searchParams.get('token'))) {
     writeWsUnauthorized(socket, 401, 'Missing or expired WebSocket session token.');
     return;
   }
@@ -380,7 +404,7 @@ function handleWsUpgrade(request: IncomingMessage, socket: Duplex, config: AppCo
     '\r\n',
   );
 
-  wsClients.add(socket);
+  state.wsClients.add(socket);
 
   socket.on('data', (raw: Buffer) => {
     if (raw.length < 2) {
@@ -389,7 +413,7 @@ function handleWsUpgrade(request: IncomingMessage, socket: Duplex, config: AppCo
 
     const opcode = raw[0] & 0x0f;
     if (opcode === 0x08) {
-      wsClients.delete(socket);
+      state.wsClients.delete(socket);
       socket.end();
       return;
     }
@@ -401,13 +425,26 @@ function handleWsUpgrade(request: IncomingMessage, socket: Duplex, config: AppCo
     }
   });
 
-  socket.on('close', () => wsClients.delete(socket));
-  socket.on('error', () => wsClients.delete(socket));
+  socket.on('close', () => state.wsClients.delete(socket));
+  socket.on('error', () => state.wsClients.delete(socket));
   socket.write(encodeWsFrame(JSON.stringify({ type: 'connected' })));
 }
 
-export function notifyClients(): void {
-  broadcast({ type: 'refresh' });
+function notifyClients(state: PanelRealtimeState): void {
+  broadcast(state, { type: 'refresh' });
+}
+
+function formatPanelUrl(server: ReturnType<typeof createServer>, config: AppConfig): string {
+  const address = server.address();
+  if (!address) {
+    return `http://${config.panelHost}:${config.panelPort}`;
+  }
+
+  if (typeof address === 'string') {
+    return address;
+  }
+
+  return `http://${config.panelHost}:${address.port}`;
 }
 
 async function routeApiRequest(
@@ -416,6 +453,7 @@ async function routeApiRequest(
   url: URL,
   actions: RunActions,
   hooks: PanelServerHooks,
+  realtimeState: PanelRealtimeState,
 ): Promise<boolean> {
   if (request.method === 'GET' && url.pathname === '/api/dashboard') {
     writeSuccess(response, await actions.getDashboardData());
@@ -423,13 +461,13 @@ async function routeApiRequest(
   }
 
   if (request.method === 'GET' && url.pathname === '/api/session') {
-    writeSuccess(response, issueWsToken());
+    writeSuccess(response, issueWsToken(realtimeState));
     return true;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/start') {
     writeSuccess(response, await actions.requestRunStart({ source: 'web' }));
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -457,13 +495,13 @@ async function routeApiRequest(
     } catch (error) {
       throw new HttpError(400, 'settings_update_failed', error instanceof Error ? error.message : 'Failed to update settings.');
     }
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/settings/quick-test') {
     writeSuccess(response, await actions.quickTestRuntimeSettings({ source: 'web' }));
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -488,7 +526,7 @@ async function routeApiRequest(
     } catch (error) {
       throw new HttpError(409, 'pause_failed', error instanceof Error ? error.message : 'Pause failed.');
     }
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -498,7 +536,7 @@ async function routeApiRequest(
     } catch (error) {
       throw new HttpError(409, 'resume_failed', error instanceof Error ? error.message : 'Resume failed.');
     }
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -510,7 +548,7 @@ async function routeApiRequest(
     } catch (error) {
       throw new HttpError(409, 'abort_failed', error instanceof Error ? error.message : 'Abort failed.');
     }
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -541,7 +579,7 @@ async function routeApiRequest(
       }
       throw new HttpError(409, 'reset_failed', error instanceof Error ? error.message : 'State reset failed.');
     }
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -555,7 +593,7 @@ async function routeApiRequest(
         { source: 'web' },
       ),
     );
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -563,7 +601,7 @@ async function routeApiRequest(
     const body = await readJsonBody(request);
     await actions.enqueueManualNote(asRequiredString(body.note, 'note'), { source: 'web' });
     writeSuccess(response, { ok: true });
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -587,7 +625,7 @@ async function routeApiRequest(
     } catch (error) {
       throw new HttpError(400, 'task_import_failed', error instanceof Error ? error.message : 'Task import failed.');
     }
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -608,7 +646,7 @@ async function routeApiRequest(
         { source: 'web' },
       ),
     );
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -633,7 +671,7 @@ async function routeApiRequest(
     }
 
     writeSuccess(response, task);
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -644,7 +682,7 @@ async function routeApiRequest(
       throw new HttpError(404, 'task_not_found', 'Task not found.');
     }
     writeSuccess(response, task);
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -655,7 +693,7 @@ async function routeApiRequest(
       throw new HttpError(404, 'task_not_found', 'Task not found.');
     }
     writeSuccess(response, task);
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -670,7 +708,7 @@ async function routeApiRequest(
       throw new HttpError(404, 'task_not_found', 'Task not found.');
     }
     writeSuccess(response, task);
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -681,7 +719,7 @@ async function routeApiRequest(
       throw new HttpError(404, 'task_not_found', 'Task not found.');
     }
     writeSuccess(response, task);
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -696,7 +734,7 @@ async function routeApiRequest(
       throw new HttpError(404, 'task_not_found', 'Task not found.');
     }
     writeSuccess(response, task);
-    notifyClients();
+    notifyClients(realtimeState);
     return true;
   }
 
@@ -708,6 +746,7 @@ export function startPanelServer(
   actions: RunActions,
   hooks: PanelServerHooks = {},
 ) {
+  const realtimeState = createRealtimeState();
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
     try {
       const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -722,7 +761,7 @@ export function startPanelServer(
           return;
         }
 
-        const handled = await routeApiRequest(request, response, url, actions, hooks);
+        const handled = await routeApiRequest(request, response, url, actions, hooks, realtimeState);
         if (!handled) {
           throw new HttpError(404, 'not_found', 'API route not found.');
         }
@@ -779,14 +818,24 @@ export function startPanelServer(
         return;
       }
 
-      handleWsUpgrade(request, socket, config);
+      handleWsUpgrade(request, socket, config, realtimeState);
     } catch {
       socket.destroy();
     }
   });
 
+  const closeServer = server.close.bind(server);
+  server.close = ((callback?: (error?: Error) => void) => {
+    disposeRealtimeState(realtimeState);
+    return closeServer(callback);
+  }) as typeof server.close;
+
+  server.on('close', () => {
+    disposeRealtimeState(realtimeState);
+  });
+
   server.listen(config.panelPort, config.panelHost, () => {
-    console.log(`panel: http://${config.panelHost}:${config.panelPort}`);
+    console.log(`panel: ${formatPanelUrl(server, config)}`);
   });
 
   return server;
