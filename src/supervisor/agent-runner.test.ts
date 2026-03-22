@@ -49,8 +49,12 @@ test('AgentRunner abortCurrent terminates an in-flight command run', async () =>
 
   const result = await pending;
 
-  assert.equal(result.exitCode, null);
-  assert.ok(result.signal === 'SIGTERM' || result.signal === 'SIGKILL');
+  if (process.platform === 'win32') {
+    assert.notEqual(result.exitCode, 0);
+  } else {
+    assert.equal(result.exitCode, null);
+    assert.ok(result.signal === 'SIGTERM' || result.signal === 'SIGKILL');
+  }
 
   rmSync(rootDir, { recursive: true, force: true });
 });

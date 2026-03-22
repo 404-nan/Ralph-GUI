@@ -1,10 +1,26 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
 import type { Duplex } from 'node:stream';
 
 import type { RunActions } from '../actions/run-actions.ts';
 import type { AppConfig } from '../config.ts';
-import { resolveStaticFile, renderPanelHtml } from './html.ts';
+import type {
+  AgentProfile,
+  ApiErrorPayload,
+  ApiResponse,
+  ImportedTaskDraft,
+  RunMode,
+  TaskPriority,
+} from '../shared/types.ts';
+import { resolveStaticFile } from './html.ts';
 
 export interface PanelServerHooks {
   onAbort?: () => void;
@@ -13,13 +29,31 @@ export interface PanelServerHooks {
 }
 
 const JSON_BODY_LIMIT = 1024 * 1024;
+const WS_GUID = '258EAFA5-E914-47DA-95CA-5AB5DC11E5B5';
+const WS_TOKEN_TTL_MS = 5 * 60 * 1000;
+const wsClients = new Set<Duplex>();
+const wsSessionTokens = new Map<string, number>();
 
 class HttpError extends Error {
   readonly statusCode: number;
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly details?: Record<string, unknown>;
 
-  constructor(statusCode: number, message: string) {
+  constructor(
+    statusCode: number,
+    code: string,
+    message: string,
+    options: {
+      retryable?: boolean;
+      details?: Record<string, unknown>;
+    } = {},
+  ) {
     super(message);
     this.statusCode = statusCode;
+    this.code = code;
+    this.retryable = options.retryable ?? false;
+    this.details = options.details;
   }
 }
 
@@ -27,43 +61,92 @@ function isPanelAuthEnabled(config: AppConfig): boolean {
   return config.panelUsername.trim().length > 0 && config.panelPassword.trim().length > 0;
 }
 
+function safeCompare(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, 'utf8');
+  const rightBuffer = Buffer.from(right, 'utf8');
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function parseBasicAuth(header: string | undefined): { username: string; password: string } | null {
+  if (!header?.startsWith('Basic ')) {
+    return null;
+  }
+
+  try {
+    const encoded = header.slice('Basic '.length).trim();
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const separatorIndex = decoded.indexOf(':');
+    if (separatorIndex < 0) {
+      return null;
+    }
+    return {
+      username: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isAuthorized(request: IncomingMessage, config: AppConfig): boolean {
   if (!isPanelAuthEnabled(config)) {
     return true;
   }
 
-  const header = request.headers.authorization;
-  if (!header?.startsWith('Basic ')) {
+  const auth = parseBasicAuth(request.headers.authorization);
+  if (!auth) {
     return false;
   }
 
-  const encoded = header.slice('Basic '.length).trim();
-  const actual = Buffer.from(encoded, 'base64').toString('utf8');
-  return actual === `${config.panelUsername}:${config.panelPassword}`;
+  return safeCompare(auth.username, config.panelUsername) && safeCompare(auth.password, config.panelPassword);
 }
 
-function writeUnauthorized(response: ServerResponse): void {
-  writeText(response, 401, '認証が必要です', {
-    'www-authenticate': 'Basic realm="Ralph Panel", charset="UTF-8"',
-  });
+function isLoopbackHost(hostname: string): boolean {
+  return ['127.0.0.1', 'localhost', '::1'].includes(hostname);
 }
 
-function writeJson(response: ServerResponse, statusCode: number, data: unknown): void {
-  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(JSON.stringify(data));
+function isTrustedOrigin(request: IncomingMessage, config: AppConfig): boolean {
+  const origin = request.headers.origin;
+  if (!origin) {
+    return true;
+  }
+
+  try {
+    const originUrl = new URL(origin);
+    const requestUrl = new URL(`http://${request.headers.host ?? `${config.panelHost}:${config.panelPort}`}`);
+
+    if (originUrl.host === requestUrl.host) {
+      return true;
+    }
+
+    if (isLoopbackHost(originUrl.hostname) && isLoopbackHost(requestUrl.hostname)) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
 }
 
-function writeText(
-  response: ServerResponse,
-  statusCode: number,
-  message: string,
-  headers: Record<string, string> = {},
-): void {
+function noStore(response: ServerResponse): void {
+  response.setHeader('cache-control', 'no-store');
+}
+
+function writeJson<T>(response: ServerResponse, statusCode: number, payload: ApiResponse<T>): void {
+  noStore(response);
   response.writeHead(statusCode, {
-    'content-type': 'text/plain; charset=utf-8',
-    ...headers,
+    'content-type': 'application/json; charset=utf-8',
+    'x-content-type-options': 'nosniff',
   });
-  response.end(message);
+  response.end(JSON.stringify(payload));
+}
+
+function writeSuccess<T>(response: ServerResponse, data: T, statusCode: number = 200): void {
+  writeJson(response, statusCode, { ok: true, data });
 }
 
 function writeError(response: ServerResponse, error: unknown): void {
@@ -71,13 +154,54 @@ function writeError(response: ServerResponse, error: unknown): void {
     return;
   }
 
-  if (error instanceof HttpError) {
-    writeText(response, error.statusCode, error.message);
-    return;
-  }
+  const payload: ApiErrorPayload =
+    error instanceof HttpError
+      ? {
+          code: error.code,
+          message: error.message,
+          retryable: error.retryable,
+          details: error.details,
+        }
+      : {
+          code: 'internal_error',
+          message: 'panel request failed',
+          retryable: true,
+        };
 
-  console.error('panel: request failed', error);
-  writeText(response, 500, 'panel request failed');
+  const statusCode = error instanceof HttpError ? error.statusCode : 500;
+  if (!(error instanceof HttpError)) {
+    console.error('panel: request failed', error);
+  }
+  writeJson(response, statusCode, { ok: false, error: payload });
+}
+
+function writeUnauthorized(response: ServerResponse): void {
+  noStore(response);
+  response.writeHead(401, {
+    'content-type': 'application/json; charset=utf-8',
+    'www-authenticate': 'Basic realm="Ralph Panel", charset="UTF-8"',
+  });
+  response.end(
+    JSON.stringify({
+      ok: false,
+      error: {
+        code: 'unauthorized',
+        message: 'Authentication is required.',
+      },
+    }),
+  );
+}
+
+function writeWsUnauthorized(socket: Duplex, statusCode: 401 | 403, message: string): void {
+  socket.write(
+    `HTTP/1.1 ${statusCode} ${statusCode === 401 ? 'Unauthorized' : 'Forbidden'}\r\n` +
+    'Connection: close\r\n' +
+    'Content-Type: text/plain; charset=utf-8\r\n' +
+    `Content-Length: ${Buffer.byteLength(message, 'utf8')}\r\n` +
+    '\r\n' +
+    message,
+  );
+  socket.destroy();
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -88,7 +212,7 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
     const buffer = Buffer.from(chunk);
     totalSize += buffer.byteLength;
     if (totalSize > JSON_BODY_LIMIT) {
-      throw new HttpError(413, 'リクエストボディが大きすぎます');
+      throw new HttpError(413, 'payload_too_large', 'Request body is too large.');
     }
     chunks.push(buffer);
   }
@@ -100,41 +224,150 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
   } catch {
-    throw new HttpError(400, 'JSON を読み取れませんでした');
+    throw new HttpError(400, 'invalid_json', 'Request body must be valid JSON.');
   }
 }
 
-// --- Minimal WebSocket implementation ---
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
 
-const WS_GUID = '258EAFA5-E914-47DA-95CA-5AB5DC11E5B5';
-const wsClients = new Set<Duplex>();
+function asRequiredString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new HttpError(400, 'validation_error', `${field} is required.`);
+  }
+  return value;
+}
+
+function asNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function asRunMode(value: unknown): RunMode | undefined {
+  return value === 'demo' || value === 'command' ? value : undefined;
+}
+
+function asTaskPriority(value: unknown): TaskPriority | undefined {
+  return value === 'critical' || value === 'high' || value === 'medium' || value === 'low'
+    ? value
+    : undefined;
+}
+
+function asAgentProfiles(value: unknown): AgentProfile[] | undefined {
+  return Array.isArray(value) ? (value as AgentProfile[]) : undefined;
+}
+
+function asReviewedDrafts(value: unknown): ImportedTaskDraft[] | undefined {
+  return Array.isArray(value) ? (value as ImportedTaskDraft[]) : undefined;
+}
+
+function asMovePosition(
+  value: unknown,
+): 'top' | 'up' | 'down' | 'bottom' | 'front' | 'back' {
+  if (
+    value === 'top'
+    || value === 'up'
+    || value === 'down'
+    || value === 'bottom'
+    || value === 'front'
+    || value === 'back'
+  ) {
+    return value;
+  }
+
+  throw new HttpError(
+    400,
+    'validation_error',
+    'position must be one of top, up, down, bottom, front, or back.',
+  );
+}
+
+function pruneExpiredTokens(): void {
+  const now = Date.now();
+  for (const [token, expiresAt] of wsSessionTokens.entries()) {
+    if (expiresAt <= now) {
+      wsSessionTokens.delete(token);
+    }
+  }
+}
+
+function issueWsToken(): { token: string; expiresAt: string } {
+  pruneExpiredTokens();
+  const token = randomBytes(24).toString('base64url');
+  const expiresAt = Date.now() + WS_TOKEN_TTL_MS;
+  wsSessionTokens.set(token, expiresAt);
+  return { token, expiresAt: new Date(expiresAt).toISOString() };
+}
+
+function consumeWsToken(token: string | null): boolean {
+  pruneExpiredTokens();
+  if (!token) {
+    return false;
+  }
+
+  const expiresAt = wsSessionTokens.get(token);
+  if (!expiresAt || expiresAt <= Date.now()) {
+    wsSessionTokens.delete(token);
+    return false;
+  }
+
+  wsSessionTokens.delete(token);
+  return true;
+}
 
 function encodeWsFrame(data: string): Buffer {
   const payload = Buffer.from(data, 'utf8');
   const len = payload.length;
-  let header: Buffer;
+
   if (len < 126) {
-    header = Buffer.alloc(2);
-    header[0] = 0x81; // FIN + text
-    header[1] = len;
-  } else if (len < 65536) {
-    header = Buffer.alloc(4);
+    return Buffer.concat([Buffer.from([0x81, len]), payload]);
+  }
+
+  if (len < 65536) {
+    const header = Buffer.alloc(4);
     header[0] = 0x81;
     header[1] = 126;
     header.writeUInt16BE(len, 2);
-  } else {
-    header = Buffer.alloc(10);
-    header[0] = 0x81;
-    header[1] = 127;
-    header.writeBigUInt64BE(BigInt(len), 2);
+    return Buffer.concat([header, payload]);
   }
+
+  const header = Buffer.alloc(10);
+  header[0] = 0x81;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(len), 2);
   return Buffer.concat([header, payload]);
 }
 
-function handleWsUpgrade(request: IncomingMessage, socket: Duplex) {
+function broadcast(message: Record<string, unknown>): void {
+  const frame = encodeWsFrame(JSON.stringify(message));
+  for (const socket of wsClients) {
+    try {
+      socket.write(frame);
+    } catch {
+      wsClients.delete(socket);
+    }
+  }
+}
+
+function handleWsUpgrade(request: IncomingMessage, socket: Duplex, config: AppConfig): void {
+  if (!isTrustedOrigin(request, config)) {
+    writeWsUnauthorized(socket, 403, 'Untrusted origin.');
+    return;
+  }
+
+  const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+  if (!consumeWsToken(url.searchParams.get('token'))) {
+    writeWsUnauthorized(socket, 401, 'Missing or expired WebSocket session token.');
+    return;
+  }
+
   const key = request.headers['sec-websocket-key'];
   if (!key) {
-    socket.destroy();
+    writeWsUnauthorized(socket, 401, 'Missing WebSocket key.');
     return;
   }
 
@@ -150,46 +383,324 @@ function handleWsUpgrade(request: IncomingMessage, socket: Duplex) {
   wsClients.add(socket);
 
   socket.on('data', (raw: Buffer) => {
-    // Handle close frame or ping
-    if (raw.length >= 2) {
-      const opcode = raw[0] & 0x0f;
-      if (opcode === 0x08) {
-        // Close frame
-        wsClients.delete(socket);
-        socket.end();
-      } else if (opcode === 0x09) {
-        // Ping - send pong
-        const pong = Buffer.from(raw);
-        pong[0] = (pong[0] & 0xf0) | 0x0a;
-        socket.write(pong);
-      }
+    if (raw.length < 2) {
+      return;
+    }
+
+    const opcode = raw[0] & 0x0f;
+    if (opcode === 0x08) {
+      wsClients.delete(socket);
+      socket.end();
+      return;
+    }
+
+    if (opcode === 0x09) {
+      const pong = Buffer.from(raw);
+      pong[0] = (pong[0] & 0xf0) | 0x0a;
+      socket.write(pong);
     }
   });
 
   socket.on('close', () => wsClients.delete(socket));
   socket.on('error', () => wsClients.delete(socket));
-
-  // Send initial refresh
   socket.write(encodeWsFrame(JSON.stringify({ type: 'connected' })));
 }
 
 export function notifyClients(): void {
-  const frame = encodeWsFrame(JSON.stringify({ type: 'refresh' }));
-  for (const socket of wsClients) {
-    try {
-      socket.write(frame);
-    } catch {
-      wsClients.delete(socket);
-    }
-  }
+  broadcast({ type: 'refresh' });
 }
 
-// --- CORS ---
+async function routeApiRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  actions: RunActions,
+  hooks: PanelServerHooks,
+): Promise<boolean> {
+  if (request.method === 'GET' && url.pathname === '/api/dashboard') {
+    writeSuccess(response, await actions.getDashboardData());
+    return true;
+  }
 
-function addCorsHeaders(response: ServerResponse): void {
-  response.setHeader('access-control-allow-origin', '*');
-  response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
-  response.setHeader('access-control-allow-headers', 'content-type, authorization');
+  if (request.method === 'GET' && url.pathname === '/api/session') {
+    writeSuccess(response, issueWsToken());
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/start') {
+    writeSuccess(response, await actions.requestRunStart({ source: 'web' }));
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/settings') {
+    const body = await readJsonBody(request);
+    try {
+      writeSuccess(
+        response,
+        await actions.updateRuntimeSettings(
+          {
+            taskName: asString(body.taskName),
+            agentCommand: asString(body.agentCommand),
+            agentCwd: asString(body.agentCwd),
+            promptFile: asString(body.promptFile),
+            promptBody: asString(body.promptBody),
+            discordNotifyChannelId: asString(body.discordNotifyChannelId),
+            maxIterations: asNumber(body.maxIterations),
+            idleSeconds: asNumber(body.idleSeconds),
+            mode: asRunMode(body.mode),
+            agentProfiles: asAgentProfiles(body.agentProfiles),
+          },
+          { source: 'web' },
+        ),
+      );
+    } catch (error) {
+      throw new HttpError(400, 'settings_update_failed', error instanceof Error ? error.message : 'Failed to update settings.');
+    }
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/settings/quick-test') {
+    writeSuccess(response, await actions.quickTestRuntimeSettings({ source: 'web' }));
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/discord/reconnect') {
+    if (!hooks.onDiscordReconnect) {
+      throw new HttpError(409, 'discord_not_running', 'Discord bridge is not running.');
+    }
+
+    try {
+      await hooks.onDiscordReconnect();
+    } catch (error) {
+      throw new HttpError(409, 'discord_reconnect_failed', error instanceof Error ? error.message : 'Discord reconnect failed.');
+    }
+
+    writeSuccess(response, { ok: true });
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/pause') {
+    try {
+      writeSuccess(response, await actions.pauseRun({ source: 'web' }));
+    } catch (error) {
+      throw new HttpError(409, 'pause_failed', error instanceof Error ? error.message : 'Pause failed.');
+    }
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/resume') {
+    try {
+      writeSuccess(response, await actions.resumeRun({ source: 'web' }));
+    } catch (error) {
+      throw new HttpError(409, 'resume_failed', error instanceof Error ? error.message : 'Resume failed.');
+    }
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/abort') {
+    try {
+      const data = await actions.abortRun({ source: 'web' });
+      hooks.onAbort?.();
+      writeSuccess(response, data);
+    } catch (error) {
+      throw new HttpError(409, 'abort_failed', error instanceof Error ? error.message : 'Abort failed.');
+    }
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/reset') {
+    try {
+      const status = actions.getStatus();
+      const mustCoordinateReset =
+        status.control === 'abort_requested'
+        || status.phase === 'queued'
+        || ['starting', 'running', 'pause_requested', 'paused'].includes(status.lifecycle);
+
+      if (mustCoordinateReset) {
+        if (!hooks.waitForIdle) {
+          throw new HttpError(409, 'reset_conflict', 'Cannot reset state while a run is still active.');
+        }
+
+        if (status.control !== 'abort_requested') {
+          await actions.abortRun({ source: 'web' });
+        }
+        hooks.onAbort?.();
+        await hooks.waitForIdle();
+      }
+
+      writeSuccess(response, { status: actions.resetRuntimeData() });
+    } catch (error) {
+      if (error instanceof HttpError) {
+        throw error;
+      }
+      throw new HttpError(409, 'reset_failed', error instanceof Error ? error.message : 'State reset failed.');
+    }
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/answer') {
+    const body = await readJsonBody(request);
+    writeSuccess(
+      response,
+      await actions.submitAnswer(
+        asRequiredString(body.questionId, 'questionId'),
+        asRequiredString(body.answer, 'answer'),
+        { source: 'web' },
+      ),
+    );
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/note') {
+    const body = await readJsonBody(request);
+    await actions.enqueueManualNote(asRequiredString(body.note, 'note'), { source: 'web' });
+    writeSuccess(response, { ok: true });
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/import/preview') {
+    const body = await readJsonBody(request);
+    writeSuccess(response, await actions.previewTaskImport(asRequiredString(body.specText, 'specText')));
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/import') {
+    const body = await readJsonBody(request);
+    try {
+      writeSuccess(
+        response,
+        await actions.importTasksFromSpec(
+          asRequiredString(body.specText, 'specText'),
+          { source: 'web' },
+          asReviewedDrafts(body.reviewedDrafts),
+        ),
+      );
+    } catch (error) {
+      throw new HttpError(400, 'task_import_failed', error instanceof Error ? error.message : 'Task import failed.');
+    }
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/create') {
+    const body = await readJsonBody(request);
+    writeSuccess(
+      response,
+      await actions.createTask(
+          {
+            title: asString(body.title),
+            summary: asString(body.summary),
+            priority: asTaskPriority(body.priority),
+            acceptanceCriteria: Array.isArray(body.acceptanceCriteria) ? body.acceptanceCriteria as string[] : undefined,
+            notes: asString(body.notes),
+            blockedReason: asString(body.blockedReason),
+          agentId: asString(body.agentId),
+        },
+        { source: 'web' },
+      ),
+    );
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/update') {
+    const body = await readJsonBody(request);
+    const task = await actions.updateTask(
+      asRequiredString(body.taskId, 'taskId'),
+      {
+        title: asString(body.title),
+        summary: asString(body.summary),
+        priority: asTaskPriority(body.priority),
+        acceptanceCriteria: Array.isArray(body.acceptanceCriteria) ? body.acceptanceCriteria as string[] : undefined,
+        notes: asString(body.notes),
+        blockedReason: asString(body.blockedReason),
+        agentId: asString(body.agentId),
+      },
+      { source: 'web' },
+    );
+
+    if (!task) {
+      throw new HttpError(404, 'task_not_found', 'Task not found.');
+    }
+
+    writeSuccess(response, task);
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/complete') {
+    const body = await readJsonBody(request);
+    const task = await actions.completeTask(asRequiredString(body.taskId, 'taskId'), { source: 'web' });
+    if (!task) {
+      throw new HttpError(404, 'task_not_found', 'Task not found.');
+    }
+    writeSuccess(response, task);
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/reopen') {
+    const body = await readJsonBody(request);
+    const task = await actions.reopenTask(asRequiredString(body.taskId, 'taskId'), { source: 'web' });
+    if (!task) {
+      throw new HttpError(404, 'task_not_found', 'Task not found.');
+    }
+    writeSuccess(response, task);
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/block') {
+    const body = await readJsonBody(request);
+    const task = await actions.blockTask(
+      asRequiredString(body.taskId, 'taskId'),
+      asRequiredString(body.reason, 'reason'),
+      { source: 'web' },
+    );
+    if (!task) {
+      throw new HttpError(404, 'task_not_found', 'Task not found.');
+    }
+    writeSuccess(response, task);
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/unblock') {
+    const body = await readJsonBody(request);
+    const task = await actions.unblockTask(asRequiredString(body.taskId, 'taskId'), { source: 'web' });
+    if (!task) {
+      throw new HttpError(404, 'task_not_found', 'Task not found.');
+    }
+    writeSuccess(response, task);
+    notifyClients();
+    return true;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/task/move') {
+    const body = await readJsonBody(request);
+    const task = await actions.moveTask(
+      asRequiredString(body.taskId, 'taskId'),
+      asMovePosition(body.position),
+      { source: 'web' },
+    );
+    if (!task) {
+      throw new HttpError(404, 'task_not_found', 'Task not found.');
+    }
+    writeSuccess(response, task);
+    notifyClients();
+    return true;
+  }
+
+  return false;
 }
 
 export function startPanelServer(
@@ -199,12 +710,22 @@ export function startPanelServer(
 ) {
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
     try {
-      addCorsHeaders(response);
+      const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
 
-      // Handle CORS preflight
-      if (request.method === 'OPTIONS') {
-        response.writeHead(204);
-        response.end();
+      if (request.method !== 'GET' && request.method !== 'HEAD' && !isTrustedOrigin(request, config)) {
+        throw new HttpError(403, 'forbidden_origin', 'Requests must originate from the local panel.');
+      }
+
+      if (url.pathname.startsWith('/api/')) {
+        if (!isAuthorized(request, config)) {
+          writeUnauthorized(response);
+          return;
+        }
+
+        const handled = await routeApiRequest(request, response, url, actions, hooks);
+        if (!handled) {
+          throw new HttpError(404, 'not_found', 'API route not found.');
+        }
         return;
       }
 
@@ -213,321 +734,53 @@ export function startPanelServer(
         return;
       }
 
-      const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-
-      // --- API Routes ---
-
-      if (request.method === 'GET' && url.pathname === '/api/dashboard') {
-        writeJson(response, 200, await actions.getDashboardData());
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/start') {
-        writeJson(response, 200, await actions.requestRunStart({ source: 'web' }));
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/settings') {
-        const body = await readJsonBody(request);
-        try {
-          writeJson(
-            response,
-            200,
-            await actions.updateRuntimeSettings(
-              {
-                taskName: typeof body.taskName === 'string' ? body.taskName : undefined,
-                agentCommand: typeof body.agentCommand === 'string' ? body.agentCommand : undefined,
-                agentCwd: typeof body.agentCwd === 'string' ? body.agentCwd : undefined,
-                promptFile: typeof body.promptFile === 'string' ? body.promptFile : undefined,
-                promptBody: typeof body.promptBody === 'string' ? body.promptBody : undefined,
-                discordNotifyChannelId:
-                  typeof body.discordNotifyChannelId === 'string' ? body.discordNotifyChannelId : undefined,
-                maxIterations:
-                  body.maxIterations !== undefined ? Number.parseInt(String(body.maxIterations), 10) : undefined,
-                idleSeconds:
-                  body.idleSeconds !== undefined ? Number.parseInt(String(body.idleSeconds), 10) : undefined,
-                mode:
-                  body.mode === 'demo'
-                    ? 'demo'
-                    : body.mode === 'command'
-                      ? 'command'
-                      : undefined,
-                agentProfiles: Array.isArray(body.agentProfiles) ? body.agentProfiles : undefined,
-              },
-              { source: 'web' },
-            ),
-          );
-        } catch (error) {
-          throw new HttpError(400, error instanceof Error ? error.message : '設定を更新できませんでした');
-        }
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/discord/reconnect') {
-        if (!hooks.onDiscordReconnect) {
-          throw new HttpError(409, 'Discord bridge は現在起動していません');
-        }
-
-        try {
-          await hooks.onDiscordReconnect();
-        } catch (error) {
-          throw new HttpError(409, error instanceof Error ? error.message : 'Discord を再接続できませんでした');
-        }
-
-        writeJson(response, 200, { ok: true });
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/pause') {
-        try {
-          writeJson(response, 200, await actions.pauseRun({ source: 'web' }));
-        } catch (error) {
-          throw new HttpError(409, error instanceof Error ? error.message : 'pause できませんでした');
-        }
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/resume') {
-        try {
-          writeJson(response, 200, await actions.resumeRun({ source: 'web' }));
-        } catch (error) {
-          throw new HttpError(409, error instanceof Error ? error.message : 'resume できませんでした');
-        }
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/abort') {
-        let data;
-        try {
-          data = await actions.abortRun({ source: 'web' });
-        } catch (error) {
-          throw new HttpError(409, error instanceof Error ? error.message : '中断できませんでした');
-        }
-        hooks.onAbort?.();
-        writeJson(response, 200, data);
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/reset') {
-        try {
-          const status = actions.getStatus();
-          const mustCoordinateReset =
-            status.control === 'abort_requested'
-            || status.phase === 'queued'
-            || ['starting', 'running', 'pause_requested', 'paused'].includes(status.lifecycle);
-
-          if (mustCoordinateReset) {
-            if (!hooks.waitForIdle) {
-              throw new HttpError(409, 'run 実行中の state reset は現在の起動モードでは扱えません');
-            }
-
-            if (status.control !== 'abort_requested') {
-              await actions.abortRun({ source: 'web' });
-            }
-            hooks.onAbort?.();
-            await hooks.waitForIdle();
-          }
-
-          writeJson(response, 200, { status: actions.resetRuntimeData() });
-        } catch (error) {
-          if (error instanceof HttpError) {
-            throw error;
-          }
-          throw new HttpError(409, error instanceof Error ? error.message : 'state を初期化できませんでした');
-        }
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/answer') {
-        const body = await readJsonBody(request);
-        if (typeof body.questionId !== 'string' || typeof body.answer !== 'string' || !body.questionId || !body.answer) {
-          throw new HttpError(400, '質問IDと回答の両方が必要です');
-        }
-
-        try {
-          writeJson(response, 200, await actions.submitAnswer(body.questionId, body.answer, { source: 'web' }));
-        } catch (error) {
-          throw new HttpError(400, error instanceof Error ? error.message : '回答を保存できませんでした');
-        }
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/note') {
-        const body = await readJsonBody(request);
-        if (typeof body.note !== 'string' || !body.note) {
-          throw new HttpError(400, 'メモを入力してください');
-        }
-
-        await actions.enqueueManualNote(body.note, { source: 'web' });
-        writeJson(response, 200, { ok: true });
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/task/import/preview') {
-        const body = await readJsonBody(request);
-        if (typeof body.specText !== 'string' || !body.specText.trim()) {
-          throw new HttpError(400, '仕様書を貼り付けてください');
-        }
-
-        writeJson(response, 200, await actions.previewTaskImport(body.specText));
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/task/import') {
-        try {
-          const body = await readJsonBody(request);
-          if (typeof body.specText !== 'string' || !body.specText.trim()) {
-            throw new HttpError(400, '仕様書を貼り付けてください');
-          }
-
-          writeJson(response, 200, await actions.importTasksFromSpec(body.specText, { source: 'web' }));
-        } catch (error) {
-          if (error instanceof HttpError) {
-            throw error;
-          }
-          throw new HttpError(400, error instanceof Error ? error.message : 'Task を一括追加できませんでした');
-        }
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/task/create') {
-        try {
-          const body = await readJsonBody(request);
-          writeJson(
-            response,
-            200,
-            await actions.createTask(
-              {
-                title: typeof body.title === 'string' ? body.title : undefined,
-                summary: typeof body.summary === 'string' ? body.summary : undefined,
-                agentId: typeof body.agentId === 'string' ? body.agentId : undefined,
-              },
-              { source: 'web' },
-            ),
-          );
-        } catch (error) {
-          throw new HttpError(400, error instanceof Error ? error.message : 'Task を作成できませんでした');
-        }
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/task/update') {
-        const body = await readJsonBody(request);
-        if (typeof body.taskId !== 'string' || !body.taskId) {
-          throw new HttpError(400, '更新対象のTask IDが必要です');
-        }
-
-        const data = await actions.updateTask(
-          body.taskId,
-          {
-            title: typeof body.title === 'string' ? body.title : undefined,
-            summary: typeof body.summary === 'string' ? body.summary : undefined,
-            agentId: typeof body.agentId === 'string' ? body.agentId : undefined,
-          },
-          { source: 'web' },
-        );
-
-        if (!data) {
-          throw new HttpError(404, '指定した Task が見つかりません');
-        }
-
-        writeJson(response, 200, data);
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/task/complete') {
-        const body = await readJsonBody(request);
-        if (typeof body.taskId !== 'string' || !body.taskId) {
-          throw new HttpError(400, '完了にするTask IDが必要です');
-        }
-
-        const data = await actions.completeTask(body.taskId, { source: 'web' });
-        if (!data) {
-          throw new HttpError(404, '指定した Task が見つかりません');
-        }
-
-        writeJson(response, 200, data);
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/task/reopen') {
-        const body = await readJsonBody(request);
-        if (typeof body.taskId !== 'string' || !body.taskId) {
-          throw new HttpError(400, '戻すTask IDが必要です');
-        }
-
-        const data = await actions.reopenTask(body.taskId, { source: 'web' });
-        if (!data) {
-          throw new HttpError(404, '指定した Task が見つかりません');
-        }
-
-        writeJson(response, 200, data);
-        notifyClients();
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/task/move') {
-        const body = await readJsonBody(request);
-        if (typeof body.taskId !== 'string' || !body.taskId) {
-          throw new HttpError(400, '並び替えるTask IDが必要です');
-        }
-        if (body.position !== 'front' && body.position !== 'back') {
-          throw new HttpError(400, 'position は front または back で指定してください');
-        }
-
-        const data = await actions.moveTask(body.taskId, body.position, { source: 'web' });
-        if (!data) {
-          throw new HttpError(404, '指定した Task が見つかりません');
-        }
-
-        writeJson(response, 200, data);
-        notifyClients();
-        return;
-      }
-
-      // --- Static file serving ---
-
-      if (request.method === 'GET') {
+      if (request.method === 'GET' || request.method === 'HEAD') {
         const staticFile = resolveStaticFile(url.pathname);
         if (staticFile) {
+          noStore(response);
           response.writeHead(200, { 'content-type': staticFile.contentType });
-          response.end(staticFile.content);
+          if (request.method === 'HEAD') {
+            response.end();
+          } else {
+            response.end(staticFile.content);
+          }
           return;
         }
 
-        // SPA fallback: serve index.html for non-API, non-asset GET requests
         const indexFile = resolveStaticFile('/');
         if (indexFile) {
+          noStore(response);
           response.writeHead(200, { 'content-type': indexFile.contentType });
-          response.end(indexFile.content);
+          if (request.method === 'HEAD') {
+            response.end();
+          } else {
+            response.end(indexFile.content);
+          }
           return;
         }
       }
 
-      throw new HttpError(404, 'ページが見つかりません');
+      throw new HttpError(404, 'not_found', 'Page not found.');
     } catch (error) {
       writeError(response, error);
     }
   });
 
-  // WebSocket upgrade handler
   server.on('upgrade', (request: IncomingMessage, socket: Duplex) => {
-    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-    if (url.pathname === '/ws') {
-      handleWsUpgrade(request, socket);
-    } else {
+    try {
+      const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+      if (url.pathname !== '/ws') {
+        socket.destroy();
+        return;
+      }
+
+      if (!isAuthorized(request, config)) {
+        writeWsUnauthorized(socket, 401, 'Authentication is required.');
+        return;
+      }
+
+      handleWsUpgrade(request, socket, config);
+    } catch {
       socket.destroy();
     }
   });

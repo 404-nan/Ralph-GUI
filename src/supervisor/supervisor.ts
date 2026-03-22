@@ -71,8 +71,21 @@ export class Supervisor {
         await this.actions.appendAgentOutput(result.output, iteration);
 
         const markerResult = await this.processOutput(result.output);
-        if (markerResult.done) {
-          await this.notifier.notifyDone('DONE マーカーを検知しました');
+        await this.actions.recordTurnResult({
+          output: result.output,
+          iteration,
+          exitCode: result.exitCode,
+          signal: result.signal,
+          doneSignalMessage: markerResult.doneMessage,
+        });
+
+        const postTurnStatus = this.actions.getStatus();
+        if (postTurnStatus.runState === 'completed') {
+          await this.notifier.notifyDone(postTurnStatus.currentStatusText || 'run completed');
+          return;
+        }
+        if (postTurnStatus.runState === 'needs_review') {
+          await this.notifier.notifyStatus(postTurnStatus.runReason);
           return;
         }
 
@@ -128,7 +141,7 @@ export class Supervisor {
     }
   }
 
-  private async processOutput(output: string): Promise<{ done: boolean }> {
+  private async processOutput(output: string): Promise<{ done: boolean; doneMessage?: string }> {
     const parsed = await this.actions.handleAgentOutput(output);
 
     for (const marker of parsed.markers) {
@@ -153,7 +166,7 @@ export class Supervisor {
       }
     }
 
-    return { done: parsed.done };
+    return { done: parsed.done, doneMessage: parsed.doneMessage };
   }
 
   private async waitWhilePausedOrAborting(): Promise<boolean> {

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { RunMode, RuntimeSettings } from './shared/types.ts';
 
@@ -55,6 +56,9 @@ interface DirectoryInspection {
   level: ConfigCheckItem['level'];
   message: string;
 }
+
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = resolve(MODULE_DIR, '..');
 
 function loadEnvFile(rootDir: string): void {
   const envPath = resolve(rootDir, '.env');
@@ -227,10 +231,21 @@ export function listDiscordOperatorUserIds(config: AppConfig): string[] {
   return [...new Set(ids)];
 }
 
+function resolveBundledPath(rootDir: string, relativePath: string): string {
+  const workspacePath = resolve(rootDir, relativePath);
+  if (existsSync(workspacePath)) {
+    return workspacePath;
+  }
+
+  return resolve(PACKAGE_ROOT, relativePath);
+}
+
 export function loadConfig(rootDir: string = process.cwd()): AppConfig {
   loadEnvFile(rootDir);
 
-  const promptFile = resolve(rootDir, process.env.RALPH_PROMPT_FILE ?? 'prompts/supervisor.md');
+  const promptFile = process.env.RALPH_PROMPT_FILE
+    ? resolve(rootDir, process.env.RALPH_PROMPT_FILE)
+    : resolveBundledPath(rootDir, 'prompts/supervisor.md');
   const taskCatalogEnv = (process.env.RALPH_TASK_CATALOG_FILE ?? '').trim();
   const taskCatalogFile = taskCatalogEnv ? resolve(rootDir, taskCatalogEnv) : '';
   const stateDir = resolve(rootDir, process.env.RALPH_STATE_DIR ?? 'state');

@@ -1,9 +1,12 @@
 {
+  "schemaVersion": 2,
   "runId": "",
   "task": "Codex supervised run",
   "phase": "idle",
   "lifecycle": "idle",
   "control": "running",
+  "runState": "idle",
+  "runReason": "Task board is empty. Add a task or import a spec to start a mission run.",
   "iteration": 0,
   "maxIterations": 20,
   "currentStatusText": "",
@@ -15,10 +18,11 @@
   "activeTaskCount": 0,
   "completedTaskCount": 0,
   "queuedTaskCount": 0,
+  "blockedTaskCount": 0,
   "maxIntegration": 1,
   "updatedAt": "2026-03-21T19:58:27.880Z",
   "agentCommand": "codex exec --full-auto --skip-git-repo-check",
   "mode": "command",
   "promptFile": "prompts/supervisor.md",
-  "thinkingText": ""
+  "thinkingText": "Ralph is preparing the next operator-visible step."
 }

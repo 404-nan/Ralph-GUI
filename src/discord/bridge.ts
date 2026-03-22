@@ -191,15 +191,15 @@ function renderTaskList(
   }
 
   const statusLabel = (value: string): string => {
-    if (value === 'active') {
+    if (value === 'current') {
       return '現在';
     }
 
-    if (value === 'queued') {
+    if (value === 'next') {
       return '待機';
     }
 
-    if (value === 'completed') {
+    if (value === 'done') {
       return '完了';
     }
 

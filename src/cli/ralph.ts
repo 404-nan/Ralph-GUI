@@ -303,11 +303,10 @@ async function printStatus(config: AppConfig, json: boolean): Promise<void> {
 
   console.log([
     `Task: ${dashboard.status.task}`,
-    `状態: ${dashboard.status.lifecycle}`,
-    `進行: ${dashboard.status.phase}`,
+    `Run state: ${dashboard.status.runState}`,
+    `理由: ${dashboard.runReason}`,
     `反復: ${dashboard.status.iteration}/${dashboard.status.maxIterations}`,
-    `MaxIntegration: ${dashboard.status.maxIntegration}`,
-    `Task数: ${dashboard.status.activeTaskCount} 件進行中 / ${dashboard.status.queuedTaskCount} 件待機 / ${dashboard.status.completedTaskCount} 件完了`,
+    `Task数: ${dashboard.status.activeTaskCount} 件 current / ${dashboard.status.queuedTaskCount} 件 next / ${dashboard.status.blockedTaskCount} 件 blocked / ${dashboard.status.completedTaskCount} 件 done`,
     `現在のTask: ${dashboard.currentTask ? `${dashboard.currentTask.id} ${dashboard.currentTask.title}` : '-'}`,
     `次のTask: ${dashboard.nextTask ? `${dashboard.nextTask.id} ${dashboard.nextTask.title}` : '-'}`,
     `質問: ${dashboard.status.pendingQuestionCount} 件待ち / ${dashboard.status.answeredQuestionCount} 件回答済み`,

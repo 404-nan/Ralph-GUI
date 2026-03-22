@@ -1,206 +1,168 @@
-<p align="center">
-  <img src="./docs/assets/panel-overview.svg" alt="RalphGUI Panel" width="680" />
-</p>
+# RalphGUI
 
-<h1 align="center">RalphGUI</h1>
+RalphGUI は、AI エージェントを「回す」ためのツールではなく、**人間が少ない負荷で AI 実行を監督し、判断し、介入できる local-first mission control** です。
 
-<p align="center">
-  <strong>AI エージェントを自動で回し続ける、汎用オーケストレーション・ループ</strong><br/>
-  Claude · Codex · Gemini · Qwen · Ollama — <code>stdin</code> で prompt を受ける CLI なら何でも OK
-</p>
+- 正直な `single_active` 実行モデル
+- `current / next / blocked / done` を中心にした task board
+- `runReason` と `runReport` による運用判断 UI
+- 初回セットアップ wizard、agent preset、diagnostics、quick test
+- file-based state を維持しつつ schema migration を自動化
+- Basic auth + same-origin + WebSocket session token による panel hardening
 
-<p align="center">
-  <a href="#-クイックスタート">クイックスタート</a> ·
-  <a href="#-使い方">使い方</a> ·
-  <a href="#-web-panel">Web Panel</a> ·
-  <a href="#-コマンド一覧">コマンド一覧</a> ·
-  <a href="./README.en.md">English</a>
-</p>
+詳細な監査と設計判断は [docs/v10-audit.md](./docs/v10-audit.md) と [docs/v10-plan.md](./docs/v10-plan.md) を参照してください。
 
----
+## Quick Start
 
-## ✨ RalphGUI とは
-
-RalphGUI は **AI コーディングエージェントの実行を自動化する CLI ツール**です。
-
-```
-prompt を渡す → エージェントが実装 → 結果を記録 → 次のタスクへ
-```
-
-この「ループ」を繰り返すことで、人が付きっきりにならなくても AI に開発を任せられます。
-
-**主な特長:**
-
-- 🔄 **自動ループ** — タスクリストに沿って何度でも自動実行
-- 🌐 **Web Panel** — ブラウザから状態確認・タスク管理・質問への回答
-- 🤖 **エージェント非依存** — `stdin` で prompt を受ける CLI なら何でも使える
-- 💬 **止まらない運用** — エージェントが質問しても loop を止めず、次ターンで回答を注入
-- 📋 **タスク管理** — 仕様書や PRD から一括タスク登録、優先順位の並び替え
-
----
-
-## 🚀 クイックスタート
-
-> **必要なもの:** Node.js 24+
+> 必要環境: Node.js 22+
 
 ```bash
 git clone https://github.com/404-nan/ralph-gui.git
 cd ralph-gui
-
+npm install
 cp .env.example .env
-npm run check        # 設定チェック
-./ralph demo         # デモモードで動作確認
+npm run check
+./ralph demo
 ```
 
-ブラウザで **http://127.0.0.1:8787** を開くと Panel が表示されます。  
-デモでは疑似エージェントが質問 → 回答 → 完了の流れを体験できます。
-
----
-
-## 📖 使い方
-
-### 1. 設定
-
-`.env` を編集して、使いたいエージェントを設定します。
+通常起動:
 
 ```bash
-# 使うエージェントのコマンド
+./ralph
+```
+
+panel は `http://127.0.0.1:8787` で開けます。初回は Setup 画面から agent preset を選び、workspace / prompt / command を検証してから Mission Control に戻してください。
+
+## Ralph v10 の考え方
+
+Ralph v10 は `true parallel` を装わず、**1 turn ごとに 1 child command を実行する single-active orchestration** を正式な実行モデルとして採用します。
+
+operator が最初に知るべきことは次の 4 点です。
+
+1. 今どの task を進めているか
+2. 次に何が控えているか
+3. 何が blocker / decision になっているか
+4. 今回の run で何が変わったか
+
+そのため、1 画面目は event log ではなく `Mission Control` です。timeline と raw output は補助情報に下げています。
+
+## 主な機能
+
+### Mission Control
+
+- `runState` と `runReason` で「進んでいる理由 / 止まっている理由」を明示
+- current task card、next-up queue、blockers、pending decisions を分離表示
+- changed files、recent outputs、test summary、recent artifacts を 1 画面で確認
+- `completed` と `needs_review` を evidence-based completion で判定
+
+### Strong Task UX
+
+- task に `title / summary / priority / acceptanceCriteria / notes / blockedReason / agentId` を保持
+- `make current / move up / move down / block / unblock / complete / reopen` を明示アクションとして提供
+- task detail modal から編集しやすい構成
+
+### Import Workflow
+
+- spec import は preview-first
+- heading / list / JSON を解析
+- duplicate merge 候補、long-item split suggestion、acceptance criteria 抽出を表示
+- reviewed drafts をそのまま import commit 可能
+
+### Setup and Diagnostics
+
+- Codex / Claude Code / Gemini CLI の preset
+- prompt / cwd / command validation
+- quick test で接続確認
+- raw command 入力は advanced settings に残しつつ、初回から強制しない
+
+### Local-First Safety
+
+- file-based state を維持
+- legacy state を自動 migration
+- panel は Basic auth、same-origin 制約、short-lived WebSocket token を適用
+
+## 実行モデル
+
+Ralph の task lane は次の 4 種類です。
+
+- `current`: 今回の turn で AI に渡す task
+- `next`: current の後に待機している focus queue
+- `blocked`: 人間判断や前提不足で止まっている task
+- `done`: 完了済み task
+
+`MaxIntegration` は operator-facing model から外し、互換目的で内部にのみ残しています。CLI の `ralph status` も `single_active` 前提の文言に更新されています。
+
+## セットアップ
+
+基本設定は `.env` か Setup 画面から行えます。
+
+```bash
 RALPH_AGENT_COMMAND=codex exec --full-auto --skip-git-repo-check
-
-# 作業ディレクトリ
 RALPH_AGENT_CWD=.
-
-# prompt テンプレート
 RALPH_PROMPT_FILE=prompts/supervisor.md
 ```
 
-#### エージェント設定例
+agent preset の例:
 
-| エージェント | コマンド |
+| Preset | Command |
 |:--|:--|
 | Codex | `codex exec --full-auto --skip-git-repo-check` |
 | Claude Code | `claude --dangerously-skip-permissions` |
 | Gemini CLI | `gemini --yolo` |
-| Qwen Code | `qwen` |
 
-> **💡 Tip:** `stdin` を受けないエージェントでも、小さなラッパースクリプトで対応できます。
->
-> ```bash
-> #!/usr/bin/env bash
-> PROMPT="$(cat)"
-> your-agent --prompt "$PROMPT"
-> ```
+prompt file を明示しない場合、Ralph は workspace の `prompts/supervisor.md` を探し、見つからなければ同梱 prompt に fallback します。
 
-### 2. タスクを用意
+## Web Panel
 
-Panel から手動追加するか、JSON ファイルで一括登録できます。
-
-```json
-{
-  "userStories": [
-    {
-      "id": "US-001",
-      "title": "ログイン画面を実装する",
-      "priority": 1,
-      "acceptanceCriteria": ["メールとパスワードでログインできる"]
-    }
-  ]
-}
-```
-
-> 1 タスク = 1 回の実行で完了できるサイズが理想です。  
-> 詳細: [docs/task-catalog.md](./docs/task-catalog.md)
-
-### 3. 実行
-
-```bash
-./ralph              # サービス起動（Panel + Supervisor）
-```
-
-あとは Panel を開いて、進捗を見守るだけです。
-
----
-
-## 🌐 Web Panel
-
-Panel は「今なにが起きているか」をひと目で把握するためのダッシュボードです。
-
-| できること | 説明 |
+| View | 役割 |
 |:--|:--|
-| 📊 ダッシュボード | 現在のタスク・進捗・ログをリアルタイム表示 |
-| ✏️ タスク管理 | 作成・編集・並び替え・完了・差し戻し |
-| 💬 質問への回答 | エージェントの質問にその場で回答 |
-| 📄 仕様書インポート | README / PRD を貼り付けてタスクを一括登録 |
-| ⚙️ 設定変更 | ランタイム設定をブラウザから変更 |
-| ▶️ 実行制御 | start / pause / resume / abort |
+| Mission Control | 今 / 次 / 詰まり / 成果 / 要判断をまとめて見る |
+| Tasks | task の作成、編集、並び替え、block / unblock、complete / reopen |
+| Import | spec preview、dedupe、split suggestion、reviewed import |
+| Setup | preset、validation、diagnostics、quick test |
+| Timeline | 補助的な event / output 確認 |
 
----
+panel の API は JSON envelope を返し、UI は toast と inline alert を使って success / warning / error / retry guidance を表示します。`console.error` に捨てるだけの失敗経路は廃止しました。
 
-## 📋 コマンド一覧
-
-```bash
-./ralph              # サービス起動（= ./ralph start）
-./ralph demo         # デモモードで動作確認
-./ralph run "タスク名"    # 起動と同時に 1 回実行
-./ralph status       # 現在の状態を表示
-./ralph check        # 設定の診断
-./ralph reset        # state/ と logs/ を初期化
-./ralph configure    # 設定変更（--max-iterations, --cwd など）
-```
-
-> `npm link` すれば `ralph` コマンドとしてどこからでも使えます。
-
----
-
-## 🐚 最小モード（ralph.sh）
-
-Panel なしのシンプルな bash ループだけ使いたい場合:
+## CLI
 
 ```bash
-./ralph.sh "codex exec --full-auto" 20
-./ralph.sh "gemini --yolo" 20
+./ralph                # start と同じ
+./ralph start          # panel + supervisor 起動
+./ralph run "task"     # task を追加して run 開始
+./ralph status         # runState / runReason / task lane を表示
+./ralph check          # 設定診断
+./ralph configure      # runtime settings 更新
+./ralph reset          # state / logs の実行データを初期化
+./ralph demo           # demo mode
 ```
 
----
+`ralph` launcher は `dist/cli/ralph.js` を優先し、開発時は `src/cli/ralph.ts` に fallback します。
 
-## 🔗 Discord 連携
+## Packaging
 
-`.env` に Discord Bot の token を設定すると、通知や操作を Discord から行えます。
+- panel asset は `process.cwd()` ではなく module-relative path で解決します
+- build は `dist` に runtime を出力し、UI build が成功していれば `dist/panel-ui` へ同梱します
+- `npm pack --dry-run` で package 内容を確認できます
+- repo 外実行や `npm link` でも panel が壊れにくい構成にしています
 
-```bash
-RALPH_DISCORD_TOKEN=your-bot-token
-RALPH_DISCORD_NOTIFY_CHANNEL_ID=channel-id
-RALPH_DISCORD_ALLOWED_USER_IDS=your-user-id
-```
+## ドキュメント
 
-> 詳細な設定項目は [.env.example](./.env.example) を参照してください。
-
----
-
-## 📚 ドキュメント
-
-| ドキュメント | 内容 |
+| Document | 内容 |
 |:--|:--|
-| [English README](./README.en.md) | English version |
-| [Architecture](./ARCHITECTURE.md) | 内部構造 |
-| [Task Catalog Guide](./docs/task-catalog.md) | タスク定義の詳細 |
-| [Minimal Example](./examples/minimal/README.md) | 最小サンプル |
-| [Contributing](./CONTRIBUTING.md) | コントリビューション |
-| [Changelog](./CHANGELOG.md) | 変更履歴 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | v10 architecture と state / transport / packaging |
+| [CHANGELOG.md](./CHANGELOG.md) | 変更履歴 |
+| [docs/v10-audit.md](./docs/v10-audit.md) | v10 audit |
+| [docs/v10-plan.md](./docs/v10-plan.md) | v10 product / architecture redesign |
+| [docs/migration-v10.md](./docs/migration-v10.md) | state / API / panel migration note |
+| [docs/task-catalog.md](./docs/task-catalog.md) | task 設計ガイド |
 
----
-
-## 🧪 開発者向け
+## Development
 
 ```bash
-npm run lint         # リント
-npm test             # テスト
-npm run smoke        # スモークテスト
-npm run build        # ビルド
+npm run lint
+npm test
+npm run build
+npm pack --dry-run --json
 ```
 
----
-
-<p align="center">
-  <strong>MIT License</strong> · Made with 🤍 by <a href="https://github.com/404-nan">404-nan</a>
-</p>
+現在のテストは state migration、orchestration、task import、run completion、panel auth / websocket を中心にカバーしています。旧 Playwright fixture test は削除済みで、UI 実ブラウザ flow は今後の追加対象です。

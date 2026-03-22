@@ -1,134 +1,180 @@
 # Architecture
 
-## 方針
+## Design Goals
 
-常用できる趣味ツールとして、少ない仕組みで Codex 運用を安定させることを優先しています。
+Ralph v10 の中心方針は次の 5 点です。
 
-- 1 repo / 1 supervisor run を中心に据えつつ、panel では current / next / active task window を見やすくする
-- file based state
-- 回答待ちがあっても止めない
-- Web と Discord は同じ action layer を使う
-- UI 層に状態遷移を埋め込まない
-- Task 量から `MaxIntegration` を決める
-- 1 run では原則 1 Task を完了させ、次のTaskは次回 run で進める
-- 初回は空の Task board から始め、サンプルデータは自動で読み込まない
+1. 実行モデルを UI と engine で一致させる
+2. operator が 1 画面で判断できる情報を優先する
+3. task を AI に渡す最小実行単位として強化する
+4. silent failure をなくし、失敗を行動可能な形で出す
+5. local-first / file-based state を維持しながら配布と安全性を上げる
 
-## レイヤ
+## Honest Execution Model
 
-### `src/state`
+Ralph は **single-active orchestration** です。
 
-`FileStateStore` が JSON / JSONL / テキストを読み書きします。
+- supervisor は 1 turn ごとに 1 child command を実行する
+- orchestration snapshot は 1 つの `currentTask` だけを選ぶ
+- 残りの task は `nextTasks`, `blockedTasks`, `doneTasks` に分ける
+- `MaxIntegration` は互換用の legacy field としてのみ残し、導出値は常に `1`
 
-- `status.json`
-- `questions.json`
-- `answers.json`
-- `manual-notes.json`
-- `blockers.json`
-- `tasks.json`
-- `settings.json`
-- `answer-inbox.jsonl`
-- `note-inbox.txt`
-- `events.jsonl`
-- `agent-output.log`
+この設計により、panel・CLI・prompt・state の認知モデルを一致させています。
 
-### `src/actions`
+## State Model
 
-運用ロジックの中心です。
+`FileStateStore` が file-based state を管理します。v10 では schema version を導入し、legacy state を安全に読みながら不足フィールドを補います。
 
-- `getStatus`
-- `getDashboardData`
-- `pauseRun`
-- `resumeRun`
-- `abortRun`
-- `submitAnswer`
-- `enqueueManualNote`
-- `createTask`
-- `updateTask`
-- `completeTask`
-- `reopenTask`
-- `listPendingQuestions`
-- `listAnsweredQuestions`
-- `preparePromptForNextTurn`
-- `handleAgentOutput`
-- `recordTaskSignal`
-- `recordThinking`
-- `updateRuntimeSettings`
-- `requestRunStart`
-- `recoverInterruptedRun`
+主要ファイル:
 
-Web と Discord はここだけを呼びます。
+- `state/status.json`
+  - operator-facing status
+  - `runState`, `runReason`, `currentTaskId`, `blockedTaskCount`
+  - legacy `phase / lifecycle / control / maxIntegration` も保持
+- `state/tasks.json`
+  - task catalog
+  - `priority`, `acceptanceCriteria`, `notes`, `blockedReason`, `agentId` を含む
+- `state/settings.json`
+  - runtime settings
+- `state/meta.json`
+  - schema version と migration metadata
+- `state/run-report.json`
+  - latest turn outcome、retry / stuck、changed files、recent artifacts、test summary、completion evidence
+- `state/questions.json`, `state/answers.json`, `state/manual-notes.json`
+  - human-in-the-loop inputs
+- `state/events.jsonl`, `logs/agent-output.log`
+  - audit trail
 
-### `src/orchestration`
+`ensureInitialized()` は legacy repo でも `meta.json` と `run-report.json` を自動生成します。
 
-Task board と active task window を導出します。
+## Task Model
 
-- `MaxIntegration` を task 数から導出
-- 現在 / 待機 / 完了 の Task board を構築
-- prompt と panel に出す active task 群を決める
-- `Thinking Stream` 用の frame を返す
+task は「AI に渡す最小実行単位」です。Ralph v10 では task を次のフィールドで扱います。
 
-### `src/parser`
+- `title`
+- `summary`
+- `priority`
+- `acceptanceCriteria[]`
+- `notes`
+- `blockedReason`
+- `agentId`
 
-Codex 出力から `[[STATUS]]`, `[[THINKING]]`, `[[TASK]]` などの structured marker を抽出します。
+UI と action layer は次の操作を共有します。
 
-### `src/prompt`
+- create / update
+- make current
+- move up / move down / move bottom
+- block / unblock
+- complete / reopen
+- import preview / import commit
 
-未注入の answer / note と orchestration snapshot を prompt 末尾へ差し込みます。
+task の display lane は `current / next / blocked / done` に正規化し、旧 `active` 多重表現を廃止しました。
 
-### `src/supervisor`
+## Orchestration Layer
 
-反復実行を管理します。
+`src/orchestration/model.ts` は task catalog から operator-facing snapshot を導出します。
 
-- queued state を監視する watcher を持つ
-- pause / resume / abort を監視
-- prompt を組み立てて agent を起動
-- output を log に保存
-- marker を action layer に流す
-- question 未回答でも loop を継続
+- `currentTask`
+- `nextTasks`
+- `blockedTasks`
+- `doneTasks`
+- Mission Control 向け task board
 
-実行自体は依然として 1 child command を turn ごとに扱います。`MaxIntegration` は複数 child process ではなく、panel と prompt で「いま同時に意識する Task の幅」を示します。
-常駐 service は queued run を state から拾って実行します。
+prompt injection はこの snapshot を使い、`current task / next queue / blockers / pending decisions` をエージェントへ明示します。
 
-### `src/panel`
+## Supervisor and Run Control
 
-軽量 HTTP サーバーです。
+`src/supervisor/supervisor.ts` は state を見ながら run loop を制御します。
 
-- orchestration dashboard 表示
-- Task board 表示
-- 現在のTask / 次のTask 表示
-- Task の作成 / 編集 / 完了 / 差し戻し
-- README / PRD / issue / メモの貼り付け preview と一括 import
-- runtime settings 編集
-- start run
-- answer
-- note injection
-- pause / resume / abort
-- Basic 認証
+主要フロー:
 
-### `src/discord`
+1. run start 要求を受ける
+2. `currentTask` を選び prompt を生成する
+3. agent command を 1 回実行する
+4. output marker と exit result を action layer に渡す
+5. `run-report.json` と `status.json` を更新する
+6. 次の turn を継続するか、`completed / needs_review / paused / blocked / error` を決める
 
-軽量な gateway bot です。
+`runReason` は operator が「なぜ今その状態なのか」を見るための文です。たとえば以下を返します。
 
-- 通知送信
-- `/status` などの message command 受信
-- slash command 登録と受信
-- `/start`, `/config`, `/set-*`, `/task-*`, `/tasks` command 受信
-- answer / note / control を action layer に委譲
-- allowlist による利用者制限
+- current task を実行中
+- pending decision 待ち
+- blocked task しか残っていない
+- acceptance criteria が未証明で review が必要
 
-## prompt injection の流れ
+## Evidence-Based Completion
 
-1. question は回答待ちとして保存
-2. answer は `answers.json` に保存
-3. 次ターン開始前に未注入 answer / note を収集
-4. prompt 末尾へ自然文で差し込み
-5. `injectedAt` を付けて再注入を防止
+Ralph v10 は `[[DONE]]` marker だけで run を閉じません。
 
-## local fallback
+completion 判定は次を組み合わせます。
 
-Discord なしでも以下で回ります。
+- `[[DONE]]` の有無
+- turn の exit code
+- unresolved blocker / pending decision
+- acceptance criteria の有無
+- changed files / recent artifacts
+- test summary
 
-- Web panel から操作
-- `state/answer-inbox.jsonl` に回答追記
-- `state/note-inbox.txt` に note 追記
-- `./ralph demo` で一連の流れを確認
+この結果は `run-report.json.completionEvidence` に保存され、run outcome は `completed` か `needs_review` に分かれます。
+
+## Panel and API
+
+panel server は軽量 HTTP + WebSocket サーバーです。
+
+v10 の構成:
+
+- API は `{ ok, data | error }` の JSON envelope
+- panel 初回表示は Mission Control
+- UI action は共通 action layer を呼び、toast / inline alert を使う
+- settings 画面で diagnostics と quick test を実行できる
+- import は preview-first
+
+主な API 群:
+
+- dashboard / session
+- run control
+- answer / note
+- task CRUD / block / unblock / reorder / complete / reopen
+- import preview / import commit
+- settings update / quick test
+
+## Security Model
+
+panel はローカル運用前提ですが、v10 では transport の雑な穴を減らしています。
+
+- Basic auth 比較は timing-safe
+- mutating request と WebSocket upgrade に same-origin / local-origin 制約
+- WebSocket は `/api/session` で払い出した short-lived token を必須化
+- unauthorized request は JSON error と適切な status code で返す
+
+## Setup and Diagnostics
+
+setup は raw command 直入力を前提にしません。
+
+- preset を選ぶ
+- workspace / prompt / command を検証する
+- quick test を流す
+- advanced settings で raw command / prompt override を直す
+
+この導線は panel の Setup view と `ralph check` の両方から使えます。
+
+## Packaging and Distribution
+
+panel asset は `process.cwd()` 依存を廃止し、module-relative path から解決します。
+
+- runtime build は `dist`
+- built UI は `dist/panel-ui`
+- `ralph` launcher は `dist/cli/ralph.js` を優先
+- 同梱 prompt は `resolveBundledPath()` で発見
+
+これにより repo 外実行、`npm link`、package tarball でも panel が壊れにくくなります。
+
+## Backward Compatibility
+
+- file-based state は維持
+- legacy `status.json`, `tasks.json`, `settings.json` は読める
+- migration は自動
+- CLI surface は維持
+- `MaxIntegration` は内部互換のみ
+
+詳細は [docs/migration-v10.md](./docs/migration-v10.md) を参照してください。

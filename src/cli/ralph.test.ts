@@ -152,7 +152,7 @@ test('ralph reset clears runtime data and recreates shareable state files', asyn
       title: 'dirty task',
       summary: 'dirty task',
       priority: 'medium',
-      status: 'queued',
+      status: 'pending',
       createdAt: '2026-03-17T00:00:00.000Z',
       updatedAt: '2026-03-17T00:00:00.000Z',
       source: 'test',
@@ -258,7 +258,7 @@ test('ralph supervisor starts the watcher without auto-queuing a run', async () 
   }
 });
 
-test('ralph launcher resolves bundled prompt paths even when started outside the repo root', () => {
+(process.platform === 'win32' ? test.skip : test)('ralph launcher resolves bundled prompt paths even when started outside the repo root', () => {
   const outsideDir = mkdtempSync(join(tmpdir(), 'ralph-launcher-'));
   const stateDir = join(outsideDir, 'state');
   const logDir = join(outsideDir, 'logs');

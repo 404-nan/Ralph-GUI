@@ -1,83 +1,134 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
 import type { DashboardData } from '../../../src/shared/types.ts';
-import { apiClient } from '../api/client.ts';
+import { ApiClientError, apiClient } from '../api/client.ts';
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof ApiClientError) {
+    return error.message;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Dashboard refresh failed.';
+}
 
 export function useDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const startPolling = (refresh: () => Promise<void>) => {
+    if (pollRef.current !== null) {
+      return;
+    }
+    pollRef.current = window.setInterval(() => {
+      void refresh();
+    }, 2500);
+  };
 
   const refresh = useCallback(async () => {
     try {
-      const d = await apiClient.getDashboard();
-      setData(d);
-    } catch (err) {
-      console.error('Dashboard fetch failed', err);
+      const next = await apiClient.getDashboard();
+      setData(next);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+      throw error;
     }
   }, []);
 
   useEffect(() => {
-    // Initial fetch
-    refresh();
+    let cancelled = false;
 
-    // Try WebSocket
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${location.host}/ws`;
-    let ws: WebSocket;
-
-    function connect() {
+    const connect = async () => {
       try {
-        ws = new WebSocket(wsUrl);
+        const session = await apiClient.getSession();
+        if (cancelled) {
+          return;
+        }
+
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${protocol}//${location.host}/ws?token=${encodeURIComponent(session.token)}`;
+        const ws = new WebSocket(url);
         wsRef.current = ws;
 
         ws.onopen = () => {
-          setIsConnected(true);
-          // Clear polling when WS is connected
-          if (pollRef.current) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
+          if (cancelled) {
+            return;
           }
+          setIsConnected(true);
+          stopPolling();
         };
 
         ws.onmessage = (event) => {
           try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'refresh' || msg.type === 'connected') {
-              refresh();
+            const payload = JSON.parse(event.data) as { type?: string };
+            if (payload.type === 'refresh' || payload.type === 'connected') {
+              void refresh();
             }
-          } catch { /* ignore */ }
-        };
-
-        ws.onclose = () => {
-          setIsConnected(false);
-          wsRef.current = null;
-          // Fallback to polling
-          if (!pollRef.current) {
-            pollRef.current = setInterval(refresh, 2000);
+          } catch {
+            // Ignore malformed control frames.
           }
-          // Reconnect after delay
-          setTimeout(connect, 3000);
         };
 
         ws.onerror = () => {
           ws.close();
         };
-      } catch {
-        // WS not available, use polling
-        if (!pollRef.current) {
-          pollRef.current = setInterval(refresh, 2000);
-        }
-      }
-    }
 
-    connect();
+        ws.onclose = () => {
+          if (cancelled) {
+            return;
+          }
+          setIsConnected(false);
+          wsRef.current = null;
+          startPolling(refresh);
+          reconnectTimerRef.current = window.setTimeout(() => {
+            void connect();
+          }, 3000);
+        };
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setIsConnected(false);
+        setErrorMessage(getErrorMessage(error));
+        startPolling(refresh);
+        reconnectTimerRef.current = window.setTimeout(() => {
+          void connect();
+        }, 4000);
+      }
+    };
+
+    void refresh().catch(() => undefined);
+    void connect();
 
     return () => {
+      cancelled = true;
       wsRef.current?.close();
-      if (pollRef.current) clearInterval(pollRef.current);
+      stopPolling();
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [refresh]);
 
-  return { data, refresh, isConnected };
+  return {
+    data,
+    refresh,
+    isConnected,
+    errorMessage,
+  };
 }

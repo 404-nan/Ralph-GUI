@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -105,6 +105,14 @@ export class AgentRunner {
 
   private killCurrent(signal: NodeJS.Signals): void {
     if (!this.currentChild) {
+      return;
+    }
+
+    if (process.platform === 'win32' && typeof this.currentChild.pid === 'number') {
+      spawnSync('taskkill', ['/pid', String(this.currentChild.pid), '/T', '/F'], {
+        shell: true,
+        windowsHide: true,
+      });
       return;
     }
 

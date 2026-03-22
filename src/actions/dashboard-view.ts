@@ -96,11 +96,20 @@ export function buildArtifacts(events: EventRecord[]): ArtifactView[] {
     if (event.type === 'task.updated') {
       return [{ id: event.id, title: 'やることを更新しました', summary, tone: 'info', timestamp: event.timestamp }];
     }
+    if (event.type === 'task.blocked') {
+      return [{ id: event.id, title: 'Task が block されました', summary, tone: 'warning', timestamp: event.timestamp }];
+    }
+    if (event.type === 'task.unblocked') {
+      return [{ id: event.id, title: 'Task を queue に戻しました', summary, tone: 'info', timestamp: event.timestamp }];
+    }
     if (event.type === 'run.started') {
       return [{ id: event.id, title: '作業を始めました', summary: message, tone: 'info', timestamp: event.timestamp }];
     }
     if (event.type === 'run.completed') {
       return [{ id: event.id, title: '作業が完了しました', summary: message, tone: 'success', timestamp: event.timestamp }];
+    }
+    if (event.type === 'run.needs_review') {
+      return [{ id: event.id, title: '人の確認が必要です', summary: message, tone: 'warning', timestamp: event.timestamp }];
     }
     if (event.type === 'run.pause') {
       return [{ id: event.id, title: '作業を止めています', summary: 'いつでも再開できます', tone: 'warning', timestamp: event.timestamp }];

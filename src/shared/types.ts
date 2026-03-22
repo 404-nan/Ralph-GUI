@@ -1,3 +1,5 @@
+export const STATE_SCHEMA_VERSION = 2;
+
 export type RunLifecycleState =
   | 'idle'
   | 'starting'
@@ -9,12 +11,23 @@ export type RunLifecycleState =
   | 'failed';
 
 export type ControlState = 'running' | 'paused' | 'abort_requested' | 'aborted';
-
 export type RunMode = 'command' | 'demo';
+export type RunState =
+  | 'idle'
+  | 'ready'
+  | 'running'
+  | 'paused'
+  | 'blocked'
+  | 'needs_review'
+  | 'completed'
+  | 'aborted'
+  | 'failed';
+export type RunTurnOutcome = 'ok' | 'non_zero_exit' | 'stuck' | 'aborted' | 'error';
+export type TestStatus = 'not_run' | 'passed' | 'failed' | 'unknown';
 
 export type TaskPriority = 'critical' | 'high' | 'medium' | 'low';
 export type StoredTaskStatus = 'pending' | 'blocked' | 'completed';
-export type DisplayTaskStatus = 'active' | 'queued' | 'blocked' | 'completed';
+export type DisplayTaskStatus = 'current' | 'next' | 'blocked' | 'done';
 
 export interface AgentProfile {
   id: string;
@@ -24,11 +37,14 @@ export interface AgentProfile {
 }
 
 export interface RunStatus {
+  schemaVersion: number;
   runId: string;
   task: string;
   phase: string;
   lifecycle: RunLifecycleState;
   control: ControlState;
+  runState: RunState;
+  runReason: string;
   iteration: number;
   maxIterations: number;
   currentStatusText: string;
@@ -44,7 +60,9 @@ export interface RunStatus {
   activeTaskCount: number;
   completedTaskCount: number;
   queuedTaskCount: number;
+  blockedTaskCount: number;
   maxIntegration: number;
+  currentTaskId?: string;
   startedAt?: string;
   finishedAt?: string;
   updatedAt: string;
@@ -104,6 +122,7 @@ export interface TaskRecord {
   source: string;
   acceptanceCriteria: string[];
   notes?: string;
+  blockedReason?: string;
   titleOverride?: string;
   summaryOverride?: string;
   agentId?: string;
@@ -166,6 +185,24 @@ export interface DashboardDiagnosticItem {
   message: string;
 }
 
+export interface SetupPresetView {
+  id: string;
+  label: string;
+  command: string;
+  description: string;
+}
+
+export interface SetupDiagnostics {
+  ok: boolean;
+  summary: {
+    ok: number;
+    warning: number;
+    error: number;
+  };
+  items: DashboardDiagnosticItem[];
+  presets: SetupPresetView[];
+}
+
 export interface TaskBoardItem extends TaskRecord {
   displayStatus: DisplayTaskStatus;
   laneId?: string;
@@ -175,8 +212,13 @@ export interface OrchestrationSnapshot {
   maxIntegration: number;
   totalTaskCount: number;
   activeTaskCount: number;
+  blockedTaskCount: number;
   completedTaskCount: number;
   queuedTaskCount: number;
+  currentTask?: TaskBoardItem;
+  nextTasks: TaskBoardItem[];
+  blockedTasks: TaskBoardItem[];
+  doneTasks: TaskBoardItem[];
   taskBoard: TaskBoardItem[];
   thinkingFrames: string[];
 }
@@ -196,14 +238,66 @@ export interface RuntimeSettings {
   agentProfiles: AgentProfile[];
 }
 
+export interface QuickTestResult {
+  ok: boolean;
+  summary: string;
+  output: string[];
+}
+
+export interface RunTurnRecord {
+  iteration: number;
+  startedAt?: string;
+  finishedAt: string;
+  exitCode: number | null;
+  signal: string | null;
+  outcome: RunTurnOutcome;
+  summary: string;
+  doneSignalReceived: boolean;
+}
+
+export interface CompletionEvidence {
+  signalReceived: boolean;
+  criteriaTotal: number;
+  criteriaMet: number;
+  unresolvedBlockers: number;
+  unresolvedDecisions: number;
+  testsStatus: TestStatus;
+  status: 'in_progress' | 'completed' | 'needs_review';
+  message: string;
+  pendingItems: string[];
+}
+
+export interface RunReport {
+  schemaVersion: number;
+  updatedAt: string;
+  retryCount: number;
+  retryBudget: number;
+  stuckCount: number;
+  currentTaskId?: string;
+  lastCompletedTaskId?: string;
+  lastTurn?: RunTurnRecord;
+  changedFiles: string[];
+  recentArtifacts: ArtifactView[];
+  recentOutputs: string[];
+  testSummary: string[];
+  completion: CompletionEvidence;
+}
+
 export interface DashboardData {
   status: RunStatus;
+  runReason: string;
+  runReport: RunReport;
   settings: RuntimeSettings;
+  setupDiagnostics: SetupDiagnostics;
   capabilities: {
     canEditAgentCommand: boolean;
+    canQuickTestAgent: boolean;
   };
   currentTask?: TaskBoardItem;
   nextTask?: TaskBoardItem;
+  nextTasks: TaskBoardItem[];
+  blockedTasks: TaskBoardItem[];
+  doneTasks: TaskBoardItem[];
   pendingQuestions: QuestionRecord[];
   pendingDecisions: DecisionView[];
   answeredQuestions: Array<QuestionRecord & { answer?: AnswerRecord }>;
@@ -231,3 +325,55 @@ export interface PromptCompositionResult {
   injectedNoteIds: string[];
   appendedSections: string[];
 }
+
+export interface StateMeta {
+  schemaVersion: number;
+  migratedAt: string;
+}
+
+export interface ImportedTaskDraft {
+  title: string;
+  summary: string;
+  priority: TaskPriority;
+  acceptanceCriteria: string[];
+  notes?: string;
+  selected?: boolean;
+}
+
+export interface TaskImportDuplicateGroup {
+  key: string;
+  indexes: number[];
+  title: string;
+}
+
+export interface TaskImportSplitSuggestion {
+  index: number;
+  suggestions: ImportedTaskDraft[];
+}
+
+export interface TaskImportPreview {
+  format: 'json' | 'list' | 'headings' | 'empty';
+  drafts: ImportedTaskDraft[];
+  duplicateGroups: TaskImportDuplicateGroup[];
+  splitSuggestions: TaskImportSplitSuggestion[];
+  truncated: boolean;
+}
+
+export interface ApiErrorPayload {
+  code: string;
+  message: string;
+  retryable?: boolean;
+  details?: Record<string, unknown>;
+}
+
+export interface ApiSuccessResponse<T> {
+  ok: true;
+  data: T;
+}
+
+export interface ApiErrorResponse {
+  ok: false;
+  error: ApiErrorPayload;
+}
+
+export type ApiResponse<T> = ApiSuccessResponse<T> | ApiErrorResponse;

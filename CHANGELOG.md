@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Ralph を `single_active` 実行モデルへ寄せ、UI / prompt / CLI / state の認知モデル不一致を解消した
+- Mission Control dashboard を導入し、`current task`, `next queue`, `blockers`, `pending decisions`, `runReason`, `runReport` を 1 画面目の中心に再設計した
+- task model を強化し、`priority`, `acceptanceCriteria`, `notes`, `blockedReason`, `agentId` を create / update / import / detail 編集で扱えるようにした
+- task 操作を `make current`, `move up`, `move down`, `block`, `unblock`, `complete`, `reopen` に整理した
+- spec import を preview-first に変更し、heading / list / JSON 解析、duplicate merge、long-item split suggestion、reviewed import を追加した
+- `DONE marker only` をやめ、exit code、blocker、criteria、changed files、artifacts、test summary を使う evidence-based completion を導入した
+- `state/meta.json` と `state/run-report.json` を追加し、legacy state を自動 migration しながら schema version を管理するようにした
+- initial setup を preset / diagnostics / quick test 前提の導線に変更し、raw command 直入力を advanced settings 側へ寄せた
+- panel API を JSON error envelope に統一し、UI の action 失敗を toast / inline alert / retry guidance として見える化した
+- panel security を強化し、timing-safe Basic auth、same-origin 制約、short-lived WebSocket session token を導入した
+- panel asset 解決を module-relative path に変更し、build 後の UI を `dist/panel-ui` へ同梱できるようにした
+- `ralph status` の表示を single-active 用語へ更新し、legacy `MaxIntegration` を operator-facing output から外した
+- orchestration、task import、run reliability、state migration、auth / websocket を守るテストを追加した
+
 ## 1.1.0 - 2026-03-13
 
 - クイック送信に送信前プレビューを追加し、メモ / Task / 回答 / 実行操作の行き先を送る前に確認できるようにした

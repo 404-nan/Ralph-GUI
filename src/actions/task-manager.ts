@@ -4,20 +4,26 @@ import { nextSequentialId } from '../shared/id.ts';
 import { nowIso } from '../shared/time.ts';
 import type {
   BlockerRecord,
+  ImportedTaskDraft,
   PromptInjectionItem,
   QuestionRecord,
   StoredTaskStatus,
   TaskBoardItem,
+  TaskImportPreview,
+  TaskPriority,
   TaskRecord,
 } from '../shared/types.ts';
 import { FileStateStore } from '../state/store.ts';
 import { loadTaskSeeds } from '../tasks/catalog.ts';
-import { parseTasksFromSpecText, type TaskImportPreview } from '../tasks/importer.ts';
+import { parseTasksFromSpecText } from '../tasks/importer.ts';
 
 export interface TaskDraftInput {
   title?: string;
   summary?: string;
+  priority?: TaskPriority;
   acceptanceCriteria?: string[];
+  notes?: string;
+  blockedReason?: string;
   agentId?: string;
 }
 
@@ -123,8 +129,8 @@ export class TaskManager {
           : existing?.status === 'completed'
             ? 'completed'
             : existing?.status === 'blocked'
-            ? 'blocked'
-            : 'pending';
+              ? 'blocked'
+              : 'pending';
       const nextTitle = existing?.titleOverride ?? seed.title;
       const nextSummary = existing?.summaryOverride ?? seed.summary;
       const nextNotes = existing?.notes ?? seed.notes;
@@ -133,7 +139,7 @@ export class TaskManager {
         id: seed.id,
         title: nextTitle,
         summary: nextSummary,
-        priority: seed.priority,
+        priority: existing?.priority ?? seed.priority,
         sortIndex: existing?.sortIndex ?? seed.sortIndex,
         status: nextStatus,
         createdAt: existing?.createdAt ?? timestamp,
@@ -146,8 +152,11 @@ export class TaskManager {
             ? existing.updatedAt
             : timestamp,
         source: existing?.source ?? seed.source,
-        acceptanceCriteria: seed.acceptanceCriteria,
+        acceptanceCriteria: existing?.acceptanceCriteria?.length
+          ? existing.acceptanceCriteria
+          : seed.acceptanceCriteria,
         notes: nextNotes,
+        blockedReason: existing?.blockedReason,
         titleOverride: existing?.titleOverride,
         summaryOverride: existing?.summaryOverride,
         agentId: existing?.agentId,
@@ -156,7 +165,7 @@ export class TaskManager {
     });
 
     const manualTasks = existingTasks.filter((task) => !seedIds.has(task.id));
-    const catalog = [...merged, ...manualTasks];
+    const catalog = orderTasks([...merged, ...manualTasks]);
     if (JSON.stringify(catalog) !== JSON.stringify(existingTasks)) {
       this.store.writeTasks(catalog);
     }
@@ -180,14 +189,16 @@ export class TaskManager {
       id: taskId,
       title,
       summary: input.summary?.trim() || title,
-      priority: 'high',
+      priority: input.priority ?? 'medium',
       sortIndex: nextIndex,
-      status: 'pending',
+      status: input.blockedReason?.trim() ? 'blocked' : 'pending',
       createdAt: timestamp,
       updatedAt: timestamp,
       source: actor.source,
       acceptanceCriteria: (input.acceptanceCriteria ?? []).map((item) => item.trim()).filter(Boolean),
-      agentId: input.agentId,
+      notes: input.notes?.trim() || undefined,
+      blockedReason: input.blockedReason?.trim() || undefined,
+      agentId: input.agentId || undefined,
     };
   }
 
@@ -195,7 +206,7 @@ export class TaskManager {
     const tasks = this.synchronizeTaskCatalog();
     const record = this.buildTaskRecord(tasks, input, actor);
     tasks.push(record);
-    this.store.writeTasks(tasks);
+    this.store.writeTasks(orderTasks(tasks));
     await this.appendEvent('task.created', 'info', `${record.id}: ${record.title}`, {
       source: actor.source,
       taskId: record.id,
@@ -207,26 +218,48 @@ export class TaskManager {
     return parseTasksFromSpecText(specText);
   }
 
+  private importDrafts(
+    tasks: TaskRecord[],
+    drafts: ImportedTaskDraft[],
+    actor: ActionActor,
+  ): TaskRecord[] {
+    return drafts
+      .filter((draft) => draft.selected !== false)
+      .map((draft) => {
+        const record = this.buildTaskRecord(
+          tasks,
+          {
+            title: draft.title,
+            summary: draft.summary,
+            priority: draft.priority,
+            acceptanceCriteria: draft.acceptanceCriteria,
+            notes: draft.notes,
+          },
+          actor,
+        );
+        tasks.push(record);
+        return record;
+      });
+  }
+
   async importTasksFromSpec(
     specText: string,
     actor: ActionActor,
+    reviewedDrafts?: ImportedTaskDraft[],
   ): Promise<{ preview: TaskImportPreview; tasks: TaskRecord[] }> {
     const preview = parseTasksFromSpecText(specText);
-    if (preview.tasks.length === 0) {
+    const drafts = reviewedDrafts ?? preview.drafts;
+    if (drafts.length === 0 || drafts.every((draft) => draft.selected === false)) {
       throw new Error('Task に分解できる項目が見つかりませんでした');
     }
 
     const tasks = this.synchronizeTaskCatalog();
-    const created = preview.tasks.map((draft) => {
-      const record = this.buildTaskRecord(tasks, draft, actor);
-      tasks.push(record);
-      return record;
-    });
+    const created = this.importDrafts(tasks, drafts, actor);
 
-    this.store.writeTasks(tasks);
+    this.store.writeTasks(orderTasks(tasks));
 
     const status = this.store.readStatus();
-    status.currentStatusText = `${created.length} 件のTaskを仕様書から追加しました`;
+    status.currentStatusText = `${created.length} 件の Task draft を仕様書から追加しました`;
     status.thinkingText = status.currentStatusText;
     status.updatedAt = nowIso();
     this.store.writeStatus(status);
@@ -234,12 +267,13 @@ export class TaskManager {
     await this.appendEvent(
       'task.imported',
       'info',
-      `${created.length} 件のTaskを仕様書から追加しました`,
+      `${created.length} 件の Task draft を仕様書から追加しました`,
       {
         source: actor.source,
         count: created.length,
         format: preview.format,
         truncated: preview.truncated,
+        duplicates: preview.duplicateGroups.length,
       },
     );
 
@@ -269,13 +303,26 @@ export class TaskManager {
       task.summary = summary;
       task.summaryOverride = seed ? (summary === seed.summary ? undefined : summary) : undefined;
     }
+    if (input.priority) {
+      task.priority = input.priority;
+    }
+    if (input.acceptanceCriteria !== undefined) {
+      task.acceptanceCriteria = input.acceptanceCriteria.map((item) => item.trim()).filter(Boolean);
+    }
+    if (input.notes !== undefined) {
+      task.notes = input.notes.trim() || undefined;
+    }
+    if (input.blockedReason !== undefined) {
+      task.blockedReason = input.blockedReason.trim() || undefined;
+      task.status = task.blockedReason ? 'blocked' : task.status === 'blocked' ? 'pending' : task.status;
+    }
     if (input.agentId !== undefined) {
       task.agentId = input.agentId || undefined;
     }
     task.updatedAt = nowIso();
     task.source = actor.source;
 
-    this.store.writeTasks(tasks);
+    this.store.writeTasks(orderTasks(tasks));
     await this.appendEvent('task.updated', 'info', `${task.id}: ${task.title}`, {
       source: actor.source,
       taskId: task.id,
@@ -283,11 +330,15 @@ export class TaskManager {
     return task;
   }
 
-  async completeTask(taskId: string, actor: ActionActor, extraContext?: {
-    listPendingQuestions: () => QuestionRecord[];
-    readBlockers: () => BlockerRecord[];
-    listPromptInjectionQueue: () => PromptInjectionItem[];
-  }): Promise<TaskRecord | null> {
+  async completeTask(
+    taskId: string,
+    actor: ActionActor,
+    extraContext?: {
+      listPendingQuestions: () => QuestionRecord[];
+      readBlockers: () => BlockerRecord[];
+      listPromptInjectionQueue: () => PromptInjectionItem[];
+    },
+  ): Promise<TaskRecord | null> {
     const tasks = this.synchronizeTaskCatalog();
     const task = tasks.find((item) => item.id === taskId);
     if (!task) {
@@ -295,10 +346,11 @@ export class TaskManager {
     }
 
     task.status = 'completed';
+    task.blockedReason = undefined;
     task.completedAt = nowIso();
     task.updatedAt = task.completedAt;
     task.source = actor.source;
-    this.store.writeTasks(tasks);
+    this.store.writeTasks(orderTasks(tasks));
 
     let nextTask: TaskBoardItem | undefined;
     if (extraContext) {
@@ -314,7 +366,7 @@ export class TaskManager {
     const status = this.store.readStatus();
     status.currentStatusText = nextTask
       ? `${task.id} を完了しました。次は ${nextTask.id} に進みます`
-      : `${task.id} を完了しました。残りのTaskはありません`;
+      : `${task.id} を完了しました。残りの Task はありません`;
     status.thinkingText = status.currentStatusText;
     status.updatedAt = nowIso();
     this.store.writeStatus(status);
@@ -334,10 +386,11 @@ export class TaskManager {
     }
 
     task.status = 'pending';
+    task.blockedReason = undefined;
     task.completedAt = undefined;
     task.updatedAt = nowIso();
     task.source = actor.source;
-    this.store.writeTasks(tasks);
+    this.store.writeTasks(orderTasks(tasks));
     await this.appendEvent('task.reopened', 'warning', `${task.id}: ${task.title}`, {
       source: actor.source,
       taskId: task.id,
@@ -345,7 +398,55 @@ export class TaskManager {
     return task;
   }
 
-  async moveTask(taskId: string, position: 'front' | 'back', actor: ActionActor): Promise<TaskRecord | null> {
+  async blockTask(
+    taskId: string,
+    reason: string,
+    actor: ActionActor,
+  ): Promise<TaskRecord | null> {
+    const tasks = this.synchronizeTaskCatalog();
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) {
+      return null;
+    }
+
+    task.status = 'blocked';
+    task.blockedReason = reason.trim() || 'Operator flagged this task as blocked.';
+    task.updatedAt = nowIso();
+    task.source = actor.source;
+    this.store.writeTasks(orderTasks(tasks));
+
+    await this.appendEvent('task.blocked', 'warning', `${task.id}: ${task.blockedReason}`, {
+      source: actor.source,
+      taskId: task.id,
+    });
+    return task;
+  }
+
+  async unblockTask(taskId: string, actor: ActionActor): Promise<TaskRecord | null> {
+    const tasks = this.synchronizeTaskCatalog();
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task) {
+      return null;
+    }
+
+    task.status = 'pending';
+    task.blockedReason = undefined;
+    task.updatedAt = nowIso();
+    task.source = actor.source;
+    this.store.writeTasks(orderTasks(tasks));
+
+    await this.appendEvent('task.unblocked', 'info', `${task.id}: queue に戻しました`, {
+      source: actor.source,
+      taskId: task.id,
+    });
+    return task;
+  }
+
+  async moveTask(
+    taskId: string,
+    position: 'top' | 'up' | 'down' | 'bottom' | 'front' | 'back',
+    actor: ActionActor,
+  ): Promise<TaskRecord | null> {
     const tasks = this.synchronizeTaskCatalog();
     const ordered = orderTasks(tasks);
     const taskIndex = ordered.findIndex((item) => item.id === taskId);
@@ -354,13 +455,37 @@ export class TaskManager {
     }
 
     const [task] = ordered.splice(taskIndex, 1);
-    ordered.splice(position === 'front' ? 0 : ordered.length, 0, task);
+    switch (position) {
+      case 'top':
+      case 'front':
+        ordered.splice(0, 0, task);
+        break;
+      case 'bottom':
+      case 'back':
+        ordered.push(task);
+        break;
+      case 'up':
+        ordered.splice(Math.max(taskIndex - 1, 0), 0, task);
+        break;
+      case 'down':
+        ordered.splice(Math.min(taskIndex + 1, ordered.length), 0, task);
+        break;
+    }
+
     resequenceTasks(ordered);
     task.updatedAt = nowIso();
     task.source = actor.source;
     this.store.writeTasks(ordered);
 
-    const directionLabel = position === 'front' ? '最優先へ移動しました' : '後ろへ回しました';
+    const directionLabel = {
+      top: '現在の focus へ移動しました',
+      front: '現在の focus へ移動しました',
+      up: '順番を 1 つ上げました',
+      down: '順番を 1 つ下げました',
+      bottom: 'queue の末尾へ移動しました',
+      back: 'queue の末尾へ移動しました',
+    }[position];
+
     await this.appendEvent('task.reordered', 'info', `${task.id}: ${directionLabel}`, {
       source: actor.source,
       taskId: task.id,
@@ -368,10 +493,7 @@ export class TaskManager {
     });
 
     const status = this.store.readStatus();
-    status.currentStatusText =
-      position === 'front'
-        ? `${task.id} を最優先にしました`
-        : `${task.id} を後ろへ回しました`;
+    status.currentStatusText = `${task.id} の順番を更新しました`;
     status.thinkingText = status.currentStatusText;
     status.updatedAt = nowIso();
     this.store.writeStatus(status);
@@ -393,6 +515,9 @@ export class TaskManager {
       existing.title = parsed.title || existing.title;
       existing.summary = parsed.title || existing.summary;
       existing.status = parsed.status;
+      if (parsed.status !== 'blocked') {
+        existing.blockedReason = undefined;
+      }
       existing.updatedAt = timestamp;
       existing.completedAt = parsed.status === 'completed' ? timestamp : undefined;
       existing.source = source;
@@ -412,7 +537,7 @@ export class TaskManager {
       });
     }
 
-    this.store.writeTasks(tasks);
+    this.store.writeTasks(orderTasks(tasks));
     await this.appendEvent(
       'task.updated',
       'info',
@@ -422,27 +547,15 @@ export class TaskManager {
   }
 
   findCurrentTask(taskBoard: TaskBoardItem[]): TaskBoardItem | undefined {
-    return taskBoard.find((task) => task.displayStatus === 'active')
-      ?? taskBoard.find((task) => task.displayStatus === 'queued');
+    return taskBoard.find((task) => task.displayStatus === 'current')
+      ?? taskBoard.find((task) => task.displayStatus === 'next');
   }
 
-  findNextTask(taskBoard: TaskBoardItem[]): TaskBoardItem | undefined {
-    const currentTask = this.findCurrentTask(taskBoard);
-    if (!currentTask) {
-      return undefined;
-    }
+  findNextTasks(taskBoard: TaskBoardItem[]): TaskBoardItem[] {
+    return taskBoard.filter((task) => task.displayStatus === 'next');
+  }
 
-    let seenCurrent = false;
-    for (const task of taskBoard) {
-      if (task.id === currentTask.id) {
-        seenCurrent = true;
-        continue;
-      }
-      if (seenCurrent && task.displayStatus !== 'completed') {
-        return task;
-      }
-    }
-
-    return undefined;
+  findDoneTasks(taskBoard: TaskBoardItem[]): TaskBoardItem[] {
+    return taskBoard.filter((task) => task.displayStatus === 'done');
   }
 }

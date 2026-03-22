@@ -1,19 +1,17 @@
-export interface ImportedTaskDraft {
-  title: string;
-  summary: string;
-  acceptanceCriteria: string[];
-}
-
-export interface TaskImportPreview {
-  format: 'json' | 'list' | 'headings' | 'empty';
-  tasks: ImportedTaskDraft[];
-  truncated: boolean;
-}
+import type {
+  ImportedTaskDraft,
+  TaskImportDuplicateGroup,
+  TaskImportPreview,
+  TaskImportSplitSuggestion,
+  TaskPriority,
+} from '../shared/types.ts';
 
 interface MutableImportedTaskDraft {
   title: string;
   summaryParts: string[];
   acceptanceCriteria: string[];
+  notes?: string;
+  priority: TaskPriority;
 }
 
 interface ParsedListItem {
@@ -30,7 +28,7 @@ interface MutableHeadingTaskDraft extends MutableImportedTaskDraft {
   level: number;
 }
 
-const MAX_IMPORTED_TASKS = 40;
+const MAX_IMPORTED_TASKS = 60;
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -39,7 +37,7 @@ function normalizeWhitespace(value: string): string {
 function normalizeTitleKey(value: string): string {
   return normalizeWhitespace(value)
     .toLowerCase()
-    .replace(/[.:：-]/g, ' ')
+    .replace(/[.:：/\\-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -66,12 +64,85 @@ function dedupeStrings(items: string[]): string[] {
   return results;
 }
 
+function toPriority(value: unknown): TaskPriority {
+  if (value === 'critical' || value === 1) return 'critical';
+  if (value === 'high' || value === 2) return 'high';
+  if (value === 'medium' || value === 3) return 'medium';
+  return 'low';
+}
+
+function splitLongDraft(draft: ImportedTaskDraft): ImportedTaskDraft[] {
+  const combined = dedupeStrings([
+    draft.summary,
+    ...draft.acceptanceCriteria,
+  ]);
+  const chunks = combined
+    .join(' | ')
+    .split(/\s*[|;；]\s*|\s*(?:and|then|そして|および|と)\s*/i)
+    .map((item) => normalizeWhitespace(item))
+    .filter((item) => item.length >= 12);
+
+  if (chunks.length < 2) {
+    return [];
+  }
+
+  return chunks.slice(0, 4).map((chunk, index) => ({
+    title: `${draft.title} ${index + 1}`,
+    summary: chunk,
+    priority: draft.priority,
+    acceptanceCriteria: [],
+    notes: draft.notes,
+    selected: false,
+  }));
+}
+
+function buildDuplicateGroups(drafts: ImportedTaskDraft[]): TaskImportDuplicateGroup[] {
+  const groups = new Map<string, number[]>();
+
+  drafts.forEach((draft, index) => {
+    const key = normalizeTitleKey(draft.title);
+    if (!key) {
+      return;
+    }
+    const existing = groups.get(key);
+    if (existing) {
+      existing.push(index);
+      return;
+    }
+    groups.set(key, [index]);
+  });
+
+  return [...groups.entries()]
+    .filter(([, indexes]) => indexes.length > 1)
+    .map(([key, indexes]) => ({
+      key,
+      indexes,
+      title: drafts[indexes[0]]?.title ?? key,
+    }));
+}
+
+function buildSplitSuggestions(drafts: ImportedTaskDraft[]): TaskImportSplitSuggestion[] {
+  return drafts.flatMap((draft, index) => {
+    const textWeight =
+      draft.summary.length + draft.acceptanceCriteria.join(' ').length + (draft.notes?.length ?? 0);
+    if (textWeight < 120 && draft.acceptanceCriteria.length < 4) {
+      return [];
+    }
+
+    const suggestions = splitLongDraft(draft);
+    if (suggestions.length < 2) {
+      return [];
+    }
+
+    return [{ index, suggestions }];
+  });
+}
+
 function finalizeTasks(
   drafts: MutableImportedTaskDraft[],
   format: TaskImportPreview['format'],
 ): TaskImportPreview {
-  const tasks: ImportedTaskDraft[] = [];
-  const seenTitles = new Set<string>();
+  const previewDrafts: ImportedTaskDraft[] = [];
   let truncated = false;
 
   for (const draft of drafts) {
@@ -80,28 +151,26 @@ function finalizeTasks(
       continue;
     }
 
-    const key = normalizeTitleKey(title);
-    if (!key || seenTitles.has(key)) {
-      continue;
-    }
-
-    seenTitles.add(key);
-
-    tasks.push({
+    previewDrafts.push({
       title,
       summary: normalizeWhitespace(draft.summaryParts.join(' ')) || title,
+      priority: draft.priority,
       acceptanceCriteria: dedupeStrings(draft.acceptanceCriteria),
+      notes: draft.notes ? normalizeWhitespace(draft.notes) : undefined,
+      selected: true,
     });
 
-    if (tasks.length >= MAX_IMPORTED_TASKS) {
-      truncated = drafts.length > tasks.length;
+    if (previewDrafts.length >= MAX_IMPORTED_TASKS) {
+      truncated = drafts.length > previewDrafts.length;
       break;
     }
   }
 
   return {
-    format: tasks.length > 0 ? format : 'empty',
-    tasks,
+    format: previewDrafts.length > 0 ? format : 'empty',
+    drafts: previewDrafts,
+    duplicateGroups: buildDuplicateGroups(previewDrafts),
+    splitSuggestions: buildSplitSuggestions(previewDrafts),
     truncated,
   };
 }
@@ -149,7 +218,7 @@ function splitInlineTask(text: string): { title: string; summary?: string } {
       continue;
     }
 
-    if (left.length <= 72 && right.length >= 8) {
+    if (left.length <= 96 && right.length >= 8) {
       return { title: left, summary: right };
     }
   }
@@ -193,11 +262,15 @@ function toJsonDraft(value: unknown): ImportedTaskDraft | null {
   return {
     title,
     summary,
+    priority: toPriority(record.priority),
     acceptanceCriteria: dedupeStrings([
       ...toStringArray(record.acceptanceCriteria),
       ...toStringArray(record.criteria),
       ...toStringArray(record.checklist),
+      ...toStringArray(record.acceptance),
     ]),
+    notes: firstString(record.notes, record.context),
+    selected: true,
   };
 }
 
@@ -249,6 +322,8 @@ function parseJsonTasks(text: string): TaskImportPreview | null {
         title: draft.title,
         summaryParts: [draft.summary],
         acceptanceCriteria: draft.acceptanceCriteria,
+        notes: draft.notes,
+        priority: draft.priority,
       })),
       'json',
     );
@@ -288,9 +363,10 @@ function parseListTasks(text: string): TaskImportPreview | null {
           summaryParts: inline.summary
             ? [inline.summary]
             : currentHeading && normalizeTitleKey(currentHeading) !== normalizeTitleKey(inline.title)
-            ? [currentHeading]
-            : [],
+              ? [currentHeading]
+              : [],
           acceptanceCriteria: [],
+          priority: 'medium',
         };
         drafts.push(currentTask);
         topLevelIndent = item.indent;
@@ -329,6 +405,7 @@ function parseHeadingTasks(text: string): TaskImportPreview {
         title: heading.text,
         summaryParts: [],
         acceptanceCriteria: [],
+        priority: heading.level <= 2 ? 'high' : 'medium',
         level: heading.level,
       };
       drafts.push(currentTask);
@@ -351,7 +428,13 @@ function parseHeadingTasks(text: string): TaskImportPreview {
 export function parseTasksFromSpecText(text: string): TaskImportPreview {
   const normalized = text.trim();
   if (!normalized) {
-    return { format: 'empty', tasks: [], truncated: false };
+    return {
+      format: 'empty',
+      drafts: [],
+      duplicateGroups: [],
+      splitSuggestions: [],
+      truncated: false,
+    };
   }
 
   const jsonPreview = parseJsonTasks(normalized);

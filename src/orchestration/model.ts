@@ -15,10 +15,6 @@ const PRIORITY_WEIGHT: Record<TaskRecord['priority'], number> = {
   low: 3,
 };
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 function sortTasks(tasks: TaskRecord[]): TaskRecord[] {
   return [...tasks].sort((left, right) => {
     const orderDelta = left.sortIndex - right.sortIndex;
@@ -35,12 +31,8 @@ function sortTasks(tasks: TaskRecord[]): TaskRecord[] {
   });
 }
 
-export function deriveMaxIntegration(taskCount: number): number {
-  if (taskCount <= 0) {
-    return 1;
-  }
-
-  return clamp(Math.ceil(taskCount / 3) + 1, 2, 6);
+export function deriveMaxIntegration(): number {
+  return 1;
 }
 
 export interface BuildOrchestrationInput {
@@ -55,61 +47,71 @@ export function buildOrchestrationSnapshot(
   input: BuildOrchestrationInput,
 ): OrchestrationSnapshot {
   const sortedTasks = sortTasks(input.tasks);
-  const unfinishedTasks = sortedTasks.filter((task) => task.status !== 'completed');
-  const maxIntegration = deriveMaxIntegration(unfinishedTasks.length || sortedTasks.length);
-  const pendingTasks = unfinishedTasks.filter((task) => task.status === 'pending');
-  const activeIds = new Set(pendingTasks.slice(0, maxIntegration).map((task) => task.id));
+  const pendingTasks = sortedTasks.filter((task) => task.status === 'pending');
+  const blockedTasks = sortedTasks.filter((task) => task.status === 'blocked');
+  const doneTasks = sortedTasks.filter((task) => task.status === 'completed');
 
-  const taskBoard: TaskBoardItem[] = sortedTasks.map((task) => {
-    const displayStatus =
-      task.status === 'completed'
-        ? 'completed'
-        : task.status === 'blocked'
-          ? 'blocked'
-          : activeIds.has(task.id)
-            ? 'active'
-            : 'queued';
+  const currentTask = pendingTasks[0];
+  const nextTasks = pendingTasks.slice(1);
+  const maxIntegration = deriveMaxIntegration();
 
-    return {
-      ...task,
-      displayStatus,
-    };
-  });
+  const taskBoard: TaskBoardItem[] = [
+    ...sortedTasks.map((task) => {
+      let displayStatus: TaskBoardItem['displayStatus'] = 'next';
+      if (task.status === 'completed') {
+        displayStatus = 'done';
+      } else if (task.status === 'blocked') {
+        displayStatus = 'blocked';
+      } else if (currentTask && task.id === currentTask.id) {
+        displayStatus = 'current';
+      }
 
-  const activeTasks = taskBoard.filter((task) => task.displayStatus === 'active');
-  const queuedTasks = taskBoard.filter((task) => task.displayStatus === 'queued');
-  const completedTasks = taskBoard.filter((task) => task.displayStatus === 'completed');
-
-  const thinkingFrames = [
-    input.status.thinkingText || input.status.currentStatusText || 'Ralph が Task の流れを組み直しています。',
-    `${activeTasks.length} 件進行中、${queuedTasks.length} 件待機、${completedTasks.length} 件完了です。`,
-    `MaxIntegration は ${unfinishedTasks.length || sortedTasks.length} 件のTaskから ${maxIntegration} に決まっています。`,
+      return {
+        ...task,
+        displayStatus,
+      };
+    }),
   ];
 
+  const thinkingFrames = [
+    input.status.thinkingText || input.status.currentStatusText || 'Ralph is preparing the next operator-visible step.',
+  ];
+
+  if (currentTask) {
+    thinkingFrames.push(`現在のTaskは ${currentTask.id} / ${currentTask.title} です。`);
+  } else if (blockedTasks.length > 0) {
+    thinkingFrames.push('進められるTaskがなく、blocker 解消待ちです。');
+  } else {
+    thinkingFrames.push('未完了Taskはありません。新しい run を待っています。');
+  }
+
+  if (nextTasks.length > 0) {
+    thinkingFrames.push(`${nextTasks.length} 件が next up queue に入っています。`);
+  }
+
   if (input.pendingQuestions.length > 0) {
-    thinkingFrames.push(
-      `${input.pendingQuestions.length} 件の回答待ちがありますが、止まらず進めています。`,
-    );
+    thinkingFrames.push(`${input.pendingQuestions.length} 件の operator decision が pending です。`);
   }
 
   if (input.promptInjectionQueue.length > 0) {
-    thinkingFrames.push(
-      `${input.promptInjectionQueue.length} 件の差し込み情報を次のターンに回します。`,
-    );
+    thinkingFrames.push(`${input.promptInjectionQueue.length} 件の note / answer が次ターンに投入されます。`);
   }
 
   if (input.blockers.length > 0) {
-    thinkingFrames.push(
-      `${input.blockers.length} 件の要対応を可視化しつつ、全体は止めていません。`,
-    );
+    thinkingFrames.push(`${input.blockers.length} 件の blocker を明示しつつ進行状況を保持しています。`);
   }
 
   return {
     maxIntegration,
     totalTaskCount: taskBoard.length,
-    activeTaskCount: activeTasks.length,
-    completedTaskCount: completedTasks.length,
-    queuedTaskCount: queuedTasks.length,
+    activeTaskCount: currentTask ? 1 : 0,
+    blockedTaskCount: blockedTasks.length,
+    completedTaskCount: doneTasks.length,
+    queuedTaskCount: nextTasks.length,
+    currentTask: taskBoard.find((task) => task.displayStatus === 'current'),
+    nextTasks: taskBoard.filter((task) => task.displayStatus === 'next'),
+    blockedTasks: taskBoard.filter((task) => task.displayStatus === 'blocked'),
+    doneTasks: taskBoard.filter((task) => task.displayStatus === 'done'),
     taskBoard,
     thinkingFrames: [...new Set(thinkingFrames.filter(Boolean))],
   };

@@ -1,9 +1,9 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import test from 'node:test';
 
 import { parseTasksFromSpecText } from './importer.ts';
 
-test('parseTasksFromSpecText reads PRD-style JSON payloads', () => {
+test('parseTasksFromSpecText reads PRD-style JSON payloads into drafts', () => {
   const preview = parseTasksFromSpecText(JSON.stringify({
     userStories: [
       {
@@ -20,71 +20,51 @@ test('parseTasksFromSpecText reads PRD-style JSON payloads', () => {
   }));
 
   assert.equal(preview.format, 'json');
-  assert.equal(preview.tasks.length, 2);
-  assert.equal(preview.tasks[0]?.title, 'ログイン画面を追加する');
-  assert.equal(preview.tasks[0]?.summary, '認証APIと接続する');
-  assert.deepEqual(preview.tasks[0]?.acceptanceCriteria, [
+  assert.equal(preview.drafts.length, 2);
+  assert.equal(preview.drafts[0]?.title, 'ログイン画面を追加する');
+  assert.equal(preview.drafts[0]?.notes, '認証APIと接続する');
+  assert.deepEqual(preview.drafts[0]?.acceptanceCriteria, [
     'メールアドレスでログインできる',
     '失敗時にエラーを出す',
   ]);
-  assert.equal(preview.tasks[1]?.title, '通知設定を保存する');
-  assert.equal(preview.tasks[1]?.summary, 'ユーザーごとに設定を保持する');
 });
 
-test('parseTasksFromSpecText extracts top-level list items and nested acceptance criteria', () => {
+test('parseTasksFromSpecText extracts list items, nested acceptance criteria, and duplicate groups', () => {
   const preview = parseTasksFromSpecText(`
 ## 認証
 - ログインAPIを追加する
   - メールアドレスとパスワードで認証できる
   - 失敗時に 401 を返す
+- ログインAPIを追加する
+  - 重複候補
 - セッションを保持する
   JWT の有効期限を更新する
   - 失効済みトークンを拒否する
 `);
 
   assert.equal(preview.format, 'list');
-  assert.equal(preview.tasks.length, 2);
-  assert.equal(preview.tasks[0]?.title, 'ログインAPIを追加する');
-  assert.equal(preview.tasks[0]?.summary, '認証');
-  assert.deepEqual(preview.tasks[0]?.acceptanceCriteria, [
+  assert.equal(preview.drafts.length, 3);
+  assert.equal(preview.drafts[0]?.title, 'ログインAPIを追加する');
+  assert.equal(preview.drafts[0]?.summary, '認証');
+  assert.deepEqual(preview.drafts[0]?.acceptanceCriteria, [
     'メールアドレスとパスワードで認証できる',
     '失敗時に 401 を返す',
   ]);
-  assert.equal(preview.tasks[1]?.title, 'セッションを保持する');
-  assert.equal(preview.tasks[1]?.summary, '認証 JWT の有効期限を更新する');
-  assert.deepEqual(preview.tasks[1]?.acceptanceCriteria, ['失効済みトークンを拒否する']);
+  assert.equal(preview.duplicateGroups.length, 1);
+  assert.deepEqual(preview.duplicateGroups[0]?.indexes, [0, 1]);
 });
 
-test('parseTasksFromSpecText supports checklists, inline descriptions, and dedupes duplicate titles', () => {
+test('parseTasksFromSpecText suggests splits for long heading-style items', () => {
   const preview = parseTasksFromSpecText(`
-# リリース前チェック
-1. [ ] 本番ENVを整える - 秘密情報を再確認する
-2. [ ] 本番ENVを整える - 重複しても1件にまとめる
-3. [x] 監視アラートを確認する - PagerDuty のルーティングを見直す
-`);
-
-  assert.equal(preview.format, 'list');
-  assert.equal(preview.tasks.length, 2);
-  assert.equal(preview.tasks[0]?.title, '本番ENVを整える');
-  assert.equal(preview.tasks[0]?.summary, '秘密情報を再確認する');
-  assert.equal(preview.tasks[1]?.title, '監視アラートを確認する');
-  assert.equal(preview.tasks[1]?.summary, 'PagerDuty のルーティングを見直す');
-});
-
-test('parseTasksFromSpecText falls back to headings when no lists are present', () => {
-  const preview = parseTasksFromSpecText(`
-# Ralph Loop v1.1
+# Ralph Loop v10
 
 ## Panel を整理する
-Task とメモの導線を分けずに、送信口をひとつに寄せる。
-
-## Demo モードを整える
-README からすぐ試せる構成にする。
+Current task card と next-up queue と blocker card と artifact card と setup wizard を 1 画面で監督しやすくする。さらに import preview と dedupe merge と split suggestion を入れる。
 `);
 
   assert.equal(preview.format, 'headings');
-  assert.equal(preview.tasks.length, 2);
-  assert.equal(preview.tasks[0]?.title, 'Panel を整理する');
-  assert.equal(preview.tasks[0]?.summary, 'Task とメモの導線を分けずに、送信口をひとつに寄せる。');
-  assert.equal(preview.tasks[1]?.title, 'Demo モードを整える');
+  assert.equal(preview.drafts.length, 1);
+  assert.equal(preview.drafts[0]?.title, 'Panel を整理する');
+  assert.ok(preview.splitSuggestions.length >= 1);
+  assert.ok(preview.splitSuggestions[0]?.suggestions.length >= 2);
 });
