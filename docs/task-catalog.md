@@ -46,8 +46,8 @@ RalphGUI は `RALPH_TASK_CATALOG_FILE` で指定した JSON を起点に Task bo
 
 ```bash
 RALPH_TASK_CATALOG_FILE=prd.json
-./ralph check
-./ralph
+ralph check
+ralph
 ```
 
 ## どう書けばよいか

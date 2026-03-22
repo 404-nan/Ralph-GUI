@@ -5,9 +5,10 @@
 この example は Codex CLI を前提にせず、`demo` mode で自己完結します。repo を clone した直後でも、そのまま確認できます。
 
 ```bash
+npm link
 cp examples/minimal/.env.example .env
 npm run check
-./ralph demo
+ralph demo
 ```
 
 この example は以下を前提にしています。
