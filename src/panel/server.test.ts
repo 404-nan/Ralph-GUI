@@ -192,6 +192,74 @@ test('panel server issues websocket session tokens and rejects upgrades without 
   }
 });
 
+test('panel server scopes websocket session tokens to the issuing server instance', async () => {
+  const rootDirA = makeRoot();
+  const rootDirB = makeRoot();
+  const configA = makeConfig(rootDirA);
+  const configB = makeConfig(rootDirB);
+  const { server: serverA, baseUrl: baseUrlA } = await startSystem(configA);
+  const { server: serverB, baseUrl: baseUrlB } = await startSystem(configB);
+
+  try {
+    const sessionResponse = await fetch(`${baseUrlA}/api/session`, {
+      headers: { Authorization: basicAuth(configA) },
+    });
+    const sessionPayload = await sessionResponse.json() as { ok: true; data: { token: string } };
+
+    assert.equal(sessionResponse.status, 200);
+    assert.ok(sessionPayload.data.token);
+
+    const crossServer = await wsHandshake(
+      baseUrlB,
+      `/ws?token=${sessionPayload.data.token}`,
+      basicAuth(configB),
+    );
+    assert.match(crossServer, /HTTP 401/);
+
+    const sameServer = await wsHandshake(
+      baseUrlA,
+      `/ws?token=${sessionPayload.data.token}`,
+      basicAuth(configA),
+    );
+    assert.match(sameServer, /HTTP 101/);
+  } finally {
+    await closeServer(serverA);
+    await closeServer(serverB);
+    rmSync(rootDirA, { recursive: true, force: true });
+    rmSync(rootDirB, { recursive: true, force: true });
+  }
+});
+
+test('panel server logs the resolved ephemeral port after listen', async () => {
+  const rootDir = makeRoot();
+  const config = makeConfig(rootDir);
+  const messages: string[] = [];
+  const originalLog = console.log;
+  let server: ReturnType<typeof startPanelServer> | undefined;
+
+  console.log = (...args: unknown[]) => {
+    messages.push(args.map((arg) => String(arg)).join(' '));
+  };
+
+  try {
+    const started = await startSystem(config);
+    server = started.server;
+    const address = server.address() as AddressInfo;
+
+    assert.equal(
+      messages.some((message) => message === `panel: http://${config.panelHost}:${address.port}`),
+      true,
+    );
+    assert.equal(messages.some((message) => message.endsWith(':0')), false);
+  } finally {
+    console.log = originalLog;
+    if (server) {
+      await closeServer(server);
+    }
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
 test('panel server exposes mission-control task flows through authenticated APIs', async () => {
   const rootDir = makeRoot();
   const config = makeConfig(rootDir);
