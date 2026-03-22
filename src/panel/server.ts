@@ -21,7 +21,7 @@ import type {
   RunMode,
   TaskPriority,
 } from '../shared/types.ts';
-import { resolveStaticFile } from './html.ts';
+import { renderPanelHtml, resolveStaticFile } from './html.ts';
 
 export interface PanelServerHooks {
   onAbort?: () => void;
@@ -747,6 +747,7 @@ export function startPanelServer(
   hooks: PanelServerHooks = {},
 ) {
   const realtimeState = createRealtimeState();
+  const isHtmlNavigation = (pathname: string): boolean => pathname === '/' || !/\.[^/]+$/.test(pathname);
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
     try {
       const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -786,14 +787,14 @@ export function startPanelServer(
           return;
         }
 
-        const indexFile = resolveStaticFile('/');
-        if (indexFile) {
+        if (isHtmlNavigation(url.pathname)) {
+          const html = renderPanelHtml();
           noStore(response);
-          response.writeHead(200, { 'content-type': indexFile.contentType });
+          response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
           if (request.method === 'HEAD') {
             response.end();
           } else {
-            response.end(indexFile.content);
+            response.end(html);
           }
           return;
         }

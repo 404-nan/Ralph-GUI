@@ -192,6 +192,26 @@ test('panel server issues websocket session tokens and rejects upgrades without 
   }
 });
 
+test('panel server serves HTML at the root path even when the UI bundle is unavailable', async () => {
+  const rootDir = makeRoot();
+  const config = makeConfig(rootDir);
+  const { server, baseUrl } = await startSystem(config);
+
+  try {
+    const response = await fetch(`${baseUrl}/`, {
+      headers: { Authorization: basicAuth(config) },
+    });
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') || '', /text\/html/);
+    assert.match(body, /html/i);
+  } finally {
+    await closeServer(server);
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
 test('panel server scopes websocket session tokens to the issuing server instance', async () => {
   const rootDirA = makeRoot();
   const rootDirB = makeRoot();

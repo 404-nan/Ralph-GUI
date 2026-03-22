@@ -258,12 +258,10 @@ test('ralph supervisor starts the watcher without auto-queuing a run', async () 
   }
 });
 
-(process.platform === 'win32' ? test.skip : test)('ralph launcher resolves bundled prompt paths even when started outside the repo root', () => {
+(process.platform === 'win32' ? test.skip : test)('ralph launcher keeps the caller cwd while resolving bundled prompt paths', () => {
   const outsideDir = mkdtempSync(join(tmpdir(), 'ralph-launcher-'));
-  const stateDir = join(outsideDir, 'state');
-  const logDir = join(outsideDir, 'logs');
 
-  const result = spawnSync(CLI_LAUNCHER_PATH, ['check', '--json'], {
+  const result = spawnSync(CLI_LAUNCHER_PATH, ['reset'], {
     cwd: outsideDir,
     env: {
       ...sanitizedEnv(),
@@ -271,21 +269,22 @@ test('ralph supervisor starts the watcher without auto-queuing a run', async () 
       RALPH_AGENT_COMMAND: 'codex exec --full-auto --skip-git-repo-check',
       RALPH_PROMPT_FILE: 'prompts/supervisor.md',
       RALPH_TASK_CATALOG_FILE: '',
-      RALPH_STATE_DIR: resolve(stateDir),
-      RALPH_LOG_DIR: resolve(logDir),
+      RALPH_STATE_DIR: 'state',
+      RALPH_LOG_DIR: 'logs',
     },
     encoding: 'utf8',
   });
 
   try {
     assert.equal(result.status, 0, result.stderr);
-    const payload = JSON.parse(result.stdout) as {
-      items: Array<{ key: string; level: string; message: string }>;
+    assert.equal(existsSync(join(outsideDir, 'state', 'status.json')), true);
+    const status = JSON.parse(readFileSync(join(outsideDir, 'state', 'status.json'), 'utf8')) as {
+      promptFile: string;
+      task: string;
     };
-    const promptCheck = payload.items.find((item) => item.key === 'promptFile');
-    assert.equal(promptCheck?.level, 'ok');
-    assert.match(promptCheck?.message || '', /prompts\/supervisor\.md/);
-    assert.doesNotMatch(promptCheck?.message || '', /ralph-launcher-/);
+    assert.equal(status.task, 'Codex supervised run');
+    assert.match(status.promptFile, /prompts\/supervisor\.md/);
+    assert.doesNotMatch(status.promptFile, /ralph-launcher-/);
   } finally {
     rmSync(outsideDir, { recursive: true, force: true });
   }

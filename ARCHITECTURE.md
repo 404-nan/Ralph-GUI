@@ -2,7 +2,7 @@
 
 ## Design Goals
 
-Ralph v10 の中心方針は次の 5 点です。
+Ralph v1 の中心方針は次の 5 点です。
 
 1. 実行モデルを UI と engine で一致させる
 2. operator が 1 画面で判断できる情報を優先する
@@ -23,7 +23,7 @@ Ralph は **single-active orchestration** です。
 
 ## State Model
 
-`FileStateStore` が file-based state を管理します。v10 では schema version を導入し、legacy state を安全に読みながら不足フィールドを補います。
+`FileStateStore` が file-based state を管理します。v1 では schema version を導入し、legacy state を安全に読みながら不足フィールドを補います。
 
 主要ファイル:
 
@@ -49,7 +49,7 @@ Ralph は **single-active orchestration** です。
 
 ## Task Model
 
-task は「AI に渡す最小実行単位」です。Ralph v10 では task を次のフィールドで扱います。
+task は「AI に渡す最小実行単位」です。Ralph v1 では task を次のフィールドで扱います。
 
 - `title`
 - `summary`
@@ -104,7 +104,7 @@ prompt injection はこの snapshot を使い、`current task / next queue / blo
 
 ## Evidence-Based Completion
 
-Ralph v10 は `[[DONE]]` marker だけで run を閉じません。
+Ralph v1 は `[[DONE]]` marker だけで run を閉じません。
 
 completion 判定は次を組み合わせます。
 
@@ -121,7 +121,7 @@ completion 判定は次を組み合わせます。
 
 panel server は軽量 HTTP + WebSocket サーバーです。
 
-v10 の構成:
+v1 の構成:
 
 - API は `{ ok, data | error }` の JSON envelope
 - panel 初回表示は Mission Control
@@ -140,7 +140,7 @@ v10 の構成:
 
 ## Security Model
 
-panel はローカル運用前提ですが、v10 では transport の雑な穴を減らしています。
+panel はローカル運用前提ですが、v1 では transport の雑な穴を減らしています。
 
 - Basic auth 比較は timing-safe
 - mutating request と WebSocket upgrade に same-origin / local-origin 制約
@@ -177,4 +177,4 @@ panel asset は `process.cwd()` 依存を廃止し、module-relative path から
 - CLI surface は維持
 - `MaxIntegration` は内部互換のみ
 
-詳細は [docs/migration-v10.md](./docs/migration-v10.md) を参照してください。
+詳細は [docs/migration-v1.md](./docs/migration-v1.md) を参照してください。

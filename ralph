@@ -13,7 +13,6 @@ while [[ -L "$SOURCE" ]]; do
 done
 
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-cd "$SCRIPT_DIR"
 
 if [[ -f "$SCRIPT_DIR/dist/cli/ralph.js" ]]; then
   exec node "$SCRIPT_DIR/dist/cli/ralph.js" "$@"

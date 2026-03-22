@@ -1,8 +1,8 @@
-# Ralph v10 Plan
+# Ralph v1 Plan
 
 ## 1. Product Decision
 
-Ralph v10 は **single-active task model + focus queue** を採用する。
+Ralph v1 は **single-active task model + focus queue** を採用する。
 
 採用理由:
 
@@ -213,7 +213,7 @@ legacy state:
 
 ## 13. Non-Goals
 
-v10 ではやらない。
+v1 ではやらない。
 
 - true parallel child execution
 - cloud-hosted state backend
