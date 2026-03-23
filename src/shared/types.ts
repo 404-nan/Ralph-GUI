@@ -77,7 +77,7 @@ export interface RunStatus {
 export interface QuestionRecord {
   id: string;
   text: string;
-  status: 'pending' | 'answered';
+  status: 'pending' | 'queued' | 'answered';
   createdAt: string;
   source: string;
   answerId?: string;
@@ -155,7 +155,7 @@ export interface DecisionChoiceView {
 export interface DecisionView {
   id: string;
   title: string;
-  status: 'pending' | 'answered';
+  status: QuestionRecord['status'];
   recommendedAnswer: string;
   fallbackAnswer: string;
   createdAt: string;
@@ -352,6 +352,7 @@ export interface TaskImportSplitSuggestion {
 }
 
 export interface TaskImportPreview {
+  previewToken: string;
   format: 'json' | 'list' | 'headings' | 'empty';
   drafts: ImportedTaskDraft[];
   duplicateGroups: TaskImportDuplicateGroup[];

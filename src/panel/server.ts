@@ -123,10 +123,6 @@ function isAuthorized(request: IncomingMessage, config: AppConfig): boolean {
   return safeCompare(auth.username, config.panelUsername) && safeCompare(auth.password, config.panelPassword);
 }
 
-function isLoopbackHost(hostname: string): boolean {
-  return ['127.0.0.1', 'localhost', '::1'].includes(hostname);
-}
-
 function isTrustedOrigin(request: IncomingMessage, config: AppConfig): boolean {
   const origin = request.headers.origin;
   if (!origin) {
@@ -138,10 +134,6 @@ function isTrustedOrigin(request: IncomingMessage, config: AppConfig): boolean {
     const requestUrl = new URL(`http://${request.headers.host ?? `${config.panelHost}:${config.panelPort}`}`);
 
     if (originUrl.host === requestUrl.host) {
-      return true;
-    }
-
-    if (isLoopbackHost(originUrl.hostname) && isLoopbackHost(requestUrl.hostname)) {
       return true;
     }
   } catch {
@@ -620,6 +612,7 @@ async function routeApiRequest(
           asRequiredString(body.specText, 'specText'),
           { source: 'web' },
           asReviewedDrafts(body.reviewedDrafts),
+          asRequiredString(body.previewToken, 'previewToken'),
         ),
       );
     } catch (error) {

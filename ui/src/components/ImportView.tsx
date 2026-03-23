@@ -1,5 +1,5 @@
 import type { ImportedTaskDraft, TaskImportPreview, TaskPriority } from '../../../src/shared/types.ts';
-import { Card, EmptyState, Alert } from './PanelPrimitives.tsx';
+import { Alert, Card, EmptyState } from './PanelPrimitives.tsx';
 import {
   joinMultilineList,
   parseMultilineList,
@@ -17,65 +17,93 @@ export function ImportView(props: {
   onPreview: () => void;
   onCommit: () => void;
   onChangeDraft: (index: number, patch: Partial<ImportedTaskDraft>) => void;
+  onUnselectDuplicates: () => void;
+  onApplySplitSuggestions: () => void;
 }) {
   return (
-    <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
+    <div className="grid gap-6 xl:grid-cols-[0.82fr_1.18fr]">
       <Card
-        title="Spec Import"
-        subtitle="Large specs are previewed, split, and deduped before they become runnable tasks."
+        title="1. 仕様を貼る"
+        subtitle="仕様書、見出し一覧、JSON のどれでも貼れます。編集すると下書きは作り直しになります。"
         actions={(
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={props.onPreview}
-              disabled={!props.importText.trim() || props.busyPreview}
-              className="rounded-xl border border-slate-800 px-3 py-2 text-sm text-slate-200 hover:border-slate-700 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Preview
-            </button>
-            <button
-              type="button"
-              onClick={props.onCommit}
-              disabled={!props.importPreview || props.busyCommit}
-              className="rounded-xl border border-sky-700 bg-sky-950 px-3 py-2 text-sm font-medium text-sky-100 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Import selected
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={props.onPreview}
+            disabled={!props.importText.trim() || props.busyPreview}
+            className="rounded-xl border border-sky-700 bg-sky-950 px-3 py-2 text-sm font-medium text-sky-100 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            下書きを作る
+          </button>
         )}
       >
         <textarea
           value={props.importText}
           onChange={(event) => props.onChangeImportText(event.target.value)}
-          rows={26}
+          rows={24}
           className="w-full rounded-2xl border border-slate-800 bg-slate-950 px-4 py-4 font-mono text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-sky-700"
-          placeholder="Paste a spec, heading list, or JSON backlog here."
+          placeholder="ここに仕様書やタスク一覧を貼り付けます"
         />
       </Card>
 
       <Card
-        title="Preview"
+        title="2. 確認して追加する"
         subtitle={
           props.importPreview
-            ? `format=${props.importPreview.format} • drafts=${props.reviewDrafts.length} • duplicates=${props.importPreview.duplicateGroups.length} • splits=${props.importPreview.splitSuggestions.length}`
-            : 'Preview first, then review drafts before importing.'
+            ? `${props.reviewDrafts.length} 件の下書きを作成しました`
+            : 'まず下書きを作ってから、内容を確認して追加します。'
         }
+        actions={(
+          <button
+            type="button"
+            onClick={props.onCommit}
+            disabled={!props.importPreview || props.busyCommit}
+            className="rounded-xl border border-emerald-700 bg-emerald-950 px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            選んだものを追加
+          </button>
+        )}
       >
         {props.importPreview ? (
           <div className="space-y-5">
             {props.importPreview.duplicateGroups.length > 0 && (
-              <Alert
-                tone="warning"
-                title="重複候補があります"
-                message={props.importPreview.duplicateGroups.map((group) => `${group.title} (#${group.indexes.map((index) => index + 1).join(', ')})`).join(' / ')}
-              />
+              <div className="space-y-3">
+                <Alert
+                  tone="warning"
+                  title="重複候補があります"
+                  message={props.importPreview.duplicateGroups.map((group) => `${group.title} (#${group.indexes.map((index) => index + 1).join(', ')})`).join(' / ')}
+                />
+                <button
+                  type="button"
+                  onClick={props.onUnselectDuplicates}
+                  className="rounded-xl border border-amber-700 bg-amber-950 px-3 py-2 text-sm font-medium text-amber-100 hover:bg-amber-900"
+                >
+                  後ろの重複候補を外す
+                </button>
+              </div>
             )}
 
             {props.importPreview.splitSuggestions.length > 0 && (
+              <div className="space-y-3">
+                <Alert
+                  tone="info"
+                  title="長い項目は分割できます"
+                  message={props.importPreview.splitSuggestions.map((suggestion) => `#${suggestion.index + 1} -> ${suggestion.suggestions.map((item) => item.title).join(', ')}`).join(' / ')}
+                />
+                <button
+                  type="button"
+                  onClick={props.onApplySplitSuggestions}
+                  className="rounded-xl border border-sky-700 bg-sky-950 px-3 py-2 text-sm font-medium text-sky-100 hover:bg-sky-900"
+                >
+                  分割案を下書きへ反映
+                </button>
+              </div>
+            )}
+
+            {props.importPreview.truncated && (
               <Alert
-                tone="info"
-                title="長い項目に split suggestion があります"
-                message={props.importPreview.splitSuggestions.map((suggestion) => `#${suggestion.index + 1} -> ${suggestion.suggestions.map((item) => item.title).join(', ')}`).join(' / ')}
+                tone="warning"
+                title="一部だけ表示しています"
+                message="候補が多いため、下書き表示を途中で切っています。必要なら仕様を分けて取り込んでください。"
               />
             )}
 
@@ -89,7 +117,7 @@ export function ImportView(props: {
                         checked={draft.selected !== false}
                         onChange={(event) => props.onChangeDraft(index, { selected: event.target.checked })}
                       />
-                      Draft #{index + 1}
+                      下書き {index + 1}
                     </label>
                     <select
                       value={draft.priority}
@@ -115,20 +143,21 @@ export function ImportView(props: {
                       onChange={(event) => props.onChangeDraft(index, { summary: event.target.value })}
                       rows={3}
                       className="w-full rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-sky-700"
+                      placeholder="この task で何をするか"
                     />
                     <textarea
                       value={joinMultilineList(draft.acceptanceCriteria)}
                       onChange={(event) => props.onChangeDraft(index, { acceptanceCriteria: parseMultilineList(event.target.value) })}
                       rows={4}
                       className="w-full rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-sky-700"
-                      placeholder="Acceptance criteria"
+                      placeholder="完了条件"
                     />
                     <textarea
                       value={draft.notes ?? ''}
                       onChange={(event) => props.onChangeDraft(index, { notes: event.target.value })}
                       rows={3}
                       className="w-full rounded-2xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-sky-700"
-                      placeholder="Notes"
+                      placeholder="補足メモ"
                     />
                   </div>
                 </div>
@@ -136,7 +165,7 @@ export function ImportView(props: {
             </div>
           </div>
         ) : (
-          <EmptyState title="Preview is empty" detail="spec を貼り付けて Preview を実行すると、draft / duplicates / split suggestions をここで確認できます。" />
+          <EmptyState title="まだ下書きはありません" detail="仕様を貼って「下書きを作る」を押すと、ここで確認できます。" />
         )}
       </Card>
     </div>

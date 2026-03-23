@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 
 import { buildOrchestrationSnapshot } from '../orchestration/model.ts';
 import { assessConfig, type AppConfig } from '../config.ts';
@@ -247,6 +247,11 @@ function collectChangedFiles(config: AppConfig): string[] {
     .slice(0, 20);
 }
 
+function isPathInsideRoot(rootDir: string, candidate: string): boolean {
+  const rel = relative(rootDir, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
 function buildCompletionEvidence(
   currentTask: TaskBoardItem | undefined,
   pendingQuestions: number,
@@ -424,15 +429,28 @@ export class RunActions {
       throw new Error('agentCommand は起動時設定に固定されています。CLI または環境変数で変更してください');
     }
 
+    const resolveWorkspacePath = (value: string, field: 'agentCwd' | 'promptFile'): string => {
+      const resolved = resolve(this.config.rootDir, value || '.');
+      if (!isPathInsideRoot(this.config.rootDir, resolved)) {
+        throw new Error(`${field} は workspace 配下だけ指定できます`);
+      }
+      return resolved;
+    };
+
     const next: RuntimeSettings = {
       ...current,
       taskName: nextTaskName ? nextTaskName : current.taskName,
       agentCommand: nextAgentCommand ? nextAgentCommand : current.agentCommand,
       agentCwd:
         nextAgentCwd !== undefined
-          ? resolve(this.config.rootDir, nextAgentCwd || '.')
+          ? resolveWorkspacePath(nextAgentCwd || '.', 'agentCwd')
           : current.agentCwd,
-      promptFile: nextPromptFile ? nextPromptFile : current.promptFile,
+      promptFile:
+        nextPromptFile !== undefined
+          ? nextPromptFile
+            ? resolveWorkspacePath(nextPromptFile, 'promptFile')
+            : ''
+          : current.promptFile,
       promptBody: input.promptBody ?? current.promptBody,
       discordNotifyChannelId:
         input.discordNotifyChannelId !== undefined
@@ -551,8 +569,9 @@ export class RunActions {
     specText: string,
     actor: ActionActor,
     reviewedDrafts?: ImportedTaskDraft[],
+    previewToken?: string,
   ): Promise<{ preview: TaskImportPreview; tasks: TaskRecord[] }> {
-    const result = await this.tasks.importTasksFromSpec(specText, actor, reviewedDrafts);
+    const result = await this.tasks.importTasksFromSpec(specText, actor, reviewedDrafts, previewToken);
     this.refreshStatusCounters();
     return result;
   }
@@ -809,6 +828,10 @@ export class RunActions {
       throw new Error(`指定した質問が見つかりません: ${normalizedQuestionId}`);
     }
 
+    if (question.status === 'queued') {
+      throw new Error(`${normalizedQuestionId} の回答は次ターンへの投入待ちです`);
+    }
+
     if (question.status === 'answered') {
       throw new Error(`${normalizedQuestionId} にはすでに回答があります`);
     }
@@ -829,15 +852,14 @@ export class RunActions {
     answers.push(record);
     this.store.writeAnswers(answers);
 
-    question.status = 'answered';
+    question.status = 'queued';
     question.answerId = record.id;
-    question.answeredAt = timestamp;
     this.store.writeQuestions(questions);
 
     await this.appendEvent(
-      'question.answered',
+      'question.queued',
       'info',
-      `${normalizedQuestionId} に回答が追加されました`,
+      `${normalizedQuestionId} の回答を次ターンへ送るキューに追加しました`,
       { source: actor.source, answerId },
     );
     this.refreshStatusCounters();
@@ -939,6 +961,20 @@ export class RunActions {
         }
       }
       this.store.writeAnswers(answers);
+
+      const injectedAnswerIds = new Set(result.injectedAnswerIds);
+      const questions = this.store.readQuestions();
+      let questionsChanged = false;
+      for (const question of questions) {
+        if (question.answerId && injectedAnswerIds.has(question.answerId) && question.status !== 'answered') {
+          question.status = 'answered';
+          question.answeredAt = injectedAt;
+          questionsChanged = true;
+        }
+      }
+      if (questionsChanged) {
+        this.store.writeQuestions(questions);
+      }
     }
 
     if (result.injectedNoteIds.length > 0) {
@@ -1351,7 +1387,7 @@ export class RunActions {
           'warning',
           `answer-inbox.jsonl の ${index + 1} 行目を読み取れませんでした: ${error instanceof Error ? error.message : line}`,
         );
-        break;
+        nextAnswerOffset = index + 1;
       }
     }
 
