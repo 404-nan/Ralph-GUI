@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { buildOrchestrationSnapshot } from '../orchestration/model.ts';
 import type { AppConfig } from '../config.ts';
 import { nextSequentialId } from '../shared/id.ts';
@@ -57,6 +59,17 @@ function normalizeTaskStatus(value?: string): StoredTaskStatus {
     return 'blocked';
   }
   return 'pending';
+}
+
+function createImportPreviewToken(specText: string): string {
+  return createHash('sha256').update(specText, 'utf8').digest('hex');
+}
+
+function withPreviewToken(specText: string, preview: Omit<TaskImportPreview, 'previewToken'>): TaskImportPreview {
+  return {
+    ...preview,
+    previewToken: createImportPreviewToken(specText),
+  };
 }
 
 export function parseTaskMarker(content: string): ParsedTaskMarker | null {
@@ -215,7 +228,7 @@ export class TaskManager {
   }
 
   async previewTaskImport(specText: string): Promise<TaskImportPreview> {
-    return parseTasksFromSpecText(specText);
+    return withPreviewToken(specText, parseTasksFromSpecText(specText));
   }
 
   private importDrafts(
@@ -246,8 +259,15 @@ export class TaskManager {
     specText: string,
     actor: ActionActor,
     reviewedDrafts?: ImportedTaskDraft[],
+    previewToken?: string,
   ): Promise<{ preview: TaskImportPreview; tasks: TaskRecord[] }> {
-    const preview = parseTasksFromSpecText(specText);
+    const preview = await this.previewTaskImport(specText);
+    if (!previewToken?.trim()) {
+      throw new Error('最新の preview から取り込んでください');
+    }
+    if (preview.previewToken !== previewToken) {
+      throw new Error('仕様書が preview 時点から変わっています。もう一度 preview を作り直してください');
+    }
     const drafts = reviewedDrafts ?? preview.drafts;
     if (drafts.length === 0 || drafts.every((draft) => draft.selected === false)) {
       throw new Error('Task に分解できる項目が見つかりませんでした');

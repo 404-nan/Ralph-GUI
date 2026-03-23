@@ -5,7 +5,7 @@ import type {
 } from '../../../src/shared/types.ts';
 import { ApiClientError, type TaskInput } from '../api/client.ts';
 
-export type View = 'mission' | 'tasks' | 'import' | 'setup' | 'timeline';
+export type View = 'mission' | 'tasks' | 'import' | 'setup' | 'timeline' | 'notes';
 
 export interface TaskEditorDraft {
   title: string;
@@ -186,6 +186,20 @@ export function draftToTaskInput(draft: TaskEditorDraft): TaskInput {
   };
 }
 
+export function validateTaskDraft(draft: TaskEditorDraft): string | null {
+  if (!draft.title.trim()) {
+    return 'タスク名を入力してください。';
+  }
+
+  const hasSummary = draft.summary.trim().length > 0;
+  const hasAcceptanceCriteria = parseMultilineList(draft.acceptanceCriteriaText).length > 0;
+  if (!hasSummary && !hasAcceptanceCriteria) {
+    return 'やることの説明か完了条件のどちらかは入れてください。';
+  }
+
+  return null;
+}
+
 export function settingsToDraft(settings: RuntimeSettings): SettingsDraft {
   return {
     taskName: settings.taskName,
@@ -199,6 +213,26 @@ export function settingsToDraft(settings: RuntimeSettings): SettingsDraft {
     discordNotifyChannelId: settings.discordNotifyChannelId,
     agentProfiles: settings.agentProfiles ?? [],
   };
+}
+
+export function validateSettingsDraft(draft: SettingsDraft): string | null {
+  if (!draft.taskName.trim()) {
+    return 'タスク名を入力してください。';
+  }
+
+  if (!draft.agentCwd.trim()) {
+    return 'workspace を入力してください。';
+  }
+
+  if (draft.mode === 'command' && !draft.agentCommand.trim()) {
+    return '通常実行では agent command が必要です。';
+  }
+
+  if (!draft.promptBody.trim() && !draft.promptFile.trim()) {
+    return 'prompt file か prompt override のどちらかを入力してください。';
+  }
+
+  return null;
 }
 
 export function getErrorMessage(error: unknown): string {

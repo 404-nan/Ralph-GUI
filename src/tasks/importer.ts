@@ -6,6 +6,8 @@ import type {
   TaskPriority,
 } from '../shared/types.ts';
 
+type ParsedTaskImportPreview = Omit<TaskImportPreview, 'previewToken'>;
+
 interface MutableImportedTaskDraft {
   title: string;
   summaryParts: string[];
@@ -141,7 +143,7 @@ function buildSplitSuggestions(drafts: ImportedTaskDraft[]): TaskImportSplitSugg
 function finalizeTasks(
   drafts: MutableImportedTaskDraft[],
   format: TaskImportPreview['format'],
-): TaskImportPreview {
+): ParsedTaskImportPreview {
   const previewDrafts: ImportedTaskDraft[] = [];
   let truncated = false;
 
@@ -274,7 +276,7 @@ function toJsonDraft(value: unknown): ImportedTaskDraft | null {
   };
 }
 
-function parseJsonTasks(text: string): TaskImportPreview | null {
+function parseJsonTasks(text: string): ParsedTaskImportPreview | null {
   try {
     const payload = JSON.parse(text) as unknown;
     const drafts: ImportedTaskDraft[] = [];
@@ -332,7 +334,7 @@ function parseJsonTasks(text: string): TaskImportPreview | null {
   }
 }
 
-function parseListTasks(text: string): TaskImportPreview | null {
+function parseListTasks(text: string): ParsedTaskImportPreview | null {
   const drafts: MutableImportedTaskDraft[] = [];
   const lines = text.split(/\r?\n/);
   let currentHeading = '';
@@ -388,7 +390,7 @@ function parseListTasks(text: string): TaskImportPreview | null {
   return finalizeTasks(drafts, 'list');
 }
 
-function parseHeadingTasks(text: string): TaskImportPreview {
+function parseHeadingTasks(text: string): ParsedTaskImportPreview {
   const drafts: MutableHeadingTaskDraft[] = [];
   const lines = text.split(/\r?\n/);
   let currentTask: MutableHeadingTaskDraft | null = null;
@@ -425,7 +427,7 @@ function parseHeadingTasks(text: string): TaskImportPreview {
   return finalizeTasks(normalizedDrafts, 'headings');
 }
 
-export function parseTasksFromSpecText(text: string): TaskImportPreview {
+export function parseTasksFromSpecText(text: string): ParsedTaskImportPreview {
   const normalized = text.trim();
   if (!normalized) {
     return {

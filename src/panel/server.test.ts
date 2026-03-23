@@ -162,6 +162,17 @@ test('panel server requires auth for API requests and rejects cross-origin POSTs
       body: JSON.stringify({ note: 'x' }),
     });
     assert.equal(crossOrigin.status, 403);
+
+    const loopbackOrigin = await fetch(`${baseUrl}/api/note`, {
+      method: 'POST',
+      headers: {
+        Authorization: basicAuth(config),
+        Origin: 'http://localhost:9999',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ note: 'x' }),
+    });
+    assert.equal(loopbackOrigin.status, 403);
   } finally {
     await closeServer(server);
     rmSync(rootDir, { recursive: true, force: true });
@@ -344,6 +355,69 @@ test('panel server exposes mission-control task flows through authenticated APIs
     assert.equal(resumedDashboard.currentTask?.id, nextTask.id);
     assert.equal(resumedDashboard.blockedTasks.length, 0);
     assert.equal(resumedDashboard.doneTasks.some((task) => task.id === currentTask.id), true);
+  } finally {
+    await closeServer(server);
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('panel server rejects runtime paths outside the workspace root', async () => {
+  const rootDir = makeRoot();
+  const config = makeConfig(rootDir);
+  const { server, baseUrl } = await startSystem(config);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/settings`, {
+      method: 'POST',
+      headers: {
+        Authorization: basicAuth(config),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ agentCwd: '..' }),
+    });
+    const payload = await response.json() as { ok: false; error: { message: string } };
+
+    assert.equal(response.status, 400);
+    assert.match(payload.error.message, /workspace/i);
+  } finally {
+    await closeServer(server);
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('panel server rejects stale task import previews', async () => {
+  const rootDir = makeRoot();
+  const config = makeConfig(rootDir);
+  const { server, baseUrl } = await startSystem(config);
+  const spec = '- Build dashboard\n- Add tests';
+
+  try {
+    const preview = await apiRequest<{ previewToken: string; drafts: unknown[] }>(
+      baseUrl,
+      config,
+      '/api/task/import/preview',
+      {
+        method: 'POST',
+        body: JSON.stringify({ specText: spec }),
+      },
+    );
+
+    const response = await fetch(`${baseUrl}/api/task/import`, {
+      method: 'POST',
+      headers: {
+        Authorization: basicAuth(config),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        specText: `${spec}\n- Ship it`,
+        reviewedDrafts: preview.drafts,
+        previewToken: preview.previewToken,
+      }),
+    });
+    const payload = await response.json() as { ok: false; error: { message: string } };
+
+    assert.equal(response.status, 400);
+    assert.match(payload.error.message, /preview|作り直/);
   } finally {
     await closeServer(server);
     rmSync(rootDir, { recursive: true, force: true });

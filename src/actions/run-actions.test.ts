@@ -226,18 +226,86 @@ test('RunActions imports reviewed drafts from preview output', async () => {
   const preview = await actions.previewTaskImport(spec);
   assert.equal(preview.format, 'list');
   assert.equal(preview.duplicateGroups.length, 1);
+  assert.match(preview.previewToken, /^[a-f0-9]{64}$/);
 
   const imported = await actions.importTasksFromSpec(spec, { source: 'test' }, [
     { ...preview.drafts[0], selected: true },
     { ...preview.drafts[1], selected: false },
     { ...preview.drafts[2], selected: true },
-  ]);
+  ], preview.previewToken);
 
   assert.equal(imported.tasks.length, 2);
   assert.deepEqual(imported.tasks.map((task) => task.title), [
     'Build a mission control dashboard',
     'Harden setup flow',
   ]);
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions rejects stale task import previews', async () => {
+  const rootDir = makeRoot();
+  const config = makeConfig(rootDir);
+  const { actions } = await makeActions(config);
+
+  const preview = await actions.previewTaskImport('- Build dashboard');
+
+  await assert.rejects(
+    actions.importTasksFromSpec('- Build dashboard\n- Add tests', { source: 'test' }, preview.drafts, preview.previewToken),
+    /preview/i,
+  );
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions keeps answers queued until they are injected into the next prompt', async () => {
+  const rootDir = makeRoot();
+  const config = makeConfig(rootDir);
+  const { actions, store } = await makeActions(config);
+
+  const question = await actions.recordQuestion('Should we keep the setup minimal?', 'test');
+  await actions.submitAnswer(question.id, 'はい、最小構成で進めてください', { source: 'test' });
+
+  let storedQuestions = store.readQuestions();
+  assert.equal(storedQuestions[0]?.status, 'queued');
+  assert.equal(actions.listPromptInjectionQueue().length, 1);
+
+  const prompt = await actions.preparePromptForNextTurn();
+  assert.match(prompt, /最小構成/);
+
+  storedQuestions = store.readQuestions();
+  assert.equal(storedQuestions[0]?.status, 'answered');
+  assert.ok(storedQuestions[0]?.answeredAt);
+  assert.equal(actions.listPromptInjectionQueue().length, 0);
+
+  rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('RunActions skips invalid answer inbox lines and continues importing later lines', async () => {
+  const rootDir = makeRoot();
+  const config = makeConfig(rootDir);
+  const { actions, store } = await makeActions(config);
+
+  const questionA = await actions.recordQuestion('A?', 'test');
+  const questionB = await actions.recordQuestion('B?', 'test');
+  writeFileSync(
+    join(config.stateDir, 'answer-inbox.jsonl'),
+    [
+      JSON.stringify({ questionId: questionA.id, answer: 'first' }),
+      '{"questionId":',
+      JSON.stringify({ questionId: questionB.id, answer: 'second' }),
+    ].join('\n'),
+    'utf8',
+  );
+
+  await actions.getDashboardData();
+
+  const questions = store.readQuestions();
+  const answers = store.readAnswers();
+  assert.equal(questions.find((item) => item.id === questionA.id)?.status, 'queued');
+  assert.equal(questions.find((item) => item.id === questionB.id)?.status, 'queued');
+  assert.equal(answers.length, 2);
+  assert.equal(store.readInboxOffsets().answersLineOffset, 3);
 
   rmSync(rootDir, { recursive: true, force: true });
 });

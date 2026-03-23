@@ -118,10 +118,14 @@ export const apiClient = {
       body: JSON.stringify({ specText }),
     }),
 
-  importTasksFromSpec: (specText: string, reviewedDrafts?: ImportedTaskDraft[]) =>
+  importTasksFromSpec: (
+    specText: string,
+    reviewedDrafts?: ImportedTaskDraft[],
+    previewToken?: string,
+  ) =>
     request<ImportResult>('/task/import', {
       method: 'POST',
-      body: JSON.stringify({ specText, reviewedDrafts }),
+      body: JSON.stringify({ specText, reviewedDrafts, previewToken }),
     }),
 
   createTask: (input: TaskInput) =>
